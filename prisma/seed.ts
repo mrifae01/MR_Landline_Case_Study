@@ -84,6 +84,87 @@ const routeData = [
       { departureTime: "2:00 PM", arrivalTime: "3:45 PM", daysOfWeek: [0, 6], priceCents: 2900 },
     ],
   },
+
+  // ── Minnesota Routes ──────────────────────────────────────────────────────
+
+  // MSP Terminal-2 Humphrey (MSB) <-> MSP Terminal-1 Lindbergh (MSA)
+  // Short terminal connector — 10 minute ride, $12
+  {
+    origin: "MSP Terminal-2 Humphrey (MSB)",
+    destination: "MSP Terminal-1 Lindbergh (MSA)",
+    schedules: [
+      { departureTime: "5:00 AM", arrivalTime: "5:10 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "7:00 AM", arrivalTime: "7:10 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "9:00 AM", arrivalTime: "9:10 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "11:00 AM", arrivalTime: "11:10 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "1:00 PM", arrivalTime: "1:10 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "3:00 PM", arrivalTime: "3:10 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "5:00 PM", arrivalTime: "5:10 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "7:00 PM", arrivalTime: "7:10 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "9:00 PM", arrivalTime: "9:10 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+    ],
+  },
+  {
+    origin: "MSP Terminal-1 Lindbergh (MSA)",
+    destination: "MSP Terminal-2 Humphrey (MSB)",
+    schedules: [
+      { departureTime: "5:30 AM", arrivalTime: "5:40 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "7:30 AM", arrivalTime: "7:40 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "9:30 AM", arrivalTime: "9:40 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "11:30 AM", arrivalTime: "11:40 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "1:30 PM", arrivalTime: "1:40 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "3:30 PM", arrivalTime: "3:40 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "5:30 PM", arrivalTime: "5:40 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "7:30 PM", arrivalTime: "7:40 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+      { departureTime: "9:30 PM", arrivalTime: "9:40 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 1200 },
+    ],
+  },
+
+  // MSP Terminal-2 Humphrey (MSB) <-> Duluth International Airport (DLH)
+  // 3-hour airport route, $3900
+  {
+    origin: "MSP Terminal-2 Humphrey (MSB)",
+    destination: "Duluth International Airport (DLH)",
+    schedules: [
+      { departureTime: "5:00 AM", arrivalTime: "8:00 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "9:00 AM", arrivalTime: "12:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "1:00 PM", arrivalTime: "4:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "5:00 PM", arrivalTime: "8:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+    ],
+  },
+  {
+    origin: "Duluth International Airport (DLH)",
+    destination: "MSP Terminal-2 Humphrey (MSB)",
+    schedules: [
+      { departureTime: "6:00 AM", arrivalTime: "9:00 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "10:00 AM", arrivalTime: "1:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "2:00 PM", arrivalTime: "5:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "6:00 PM", arrivalTime: "9:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+    ],
+  },
+
+  // MSP Terminal-1 Lindbergh (MSA) <-> Duluth International Airport (DLH)
+  // 3-hour airport route, $3900
+  {
+    origin: "MSP Terminal-1 Lindbergh (MSA)",
+    destination: "Duluth International Airport (DLH)",
+    schedules: [
+      { departureTime: "6:00 AM", arrivalTime: "9:00 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "10:00 AM", arrivalTime: "1:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "2:00 PM", arrivalTime: "5:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "6:00 PM", arrivalTime: "9:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+    ],
+  },
+  {
+    origin: "Duluth International Airport (DLH)",
+    destination: "MSP Terminal-1 Lindbergh (MSA)",
+    schedules: [
+      { departureTime: "5:00 AM", arrivalTime: "8:00 AM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "9:00 AM", arrivalTime: "12:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "1:00 PM", arrivalTime: "4:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+      { departureTime: "5:00 PM", arrivalTime: "8:00 PM", daysOfWeek: [0, 1, 2, 3, 4, 5, 6], priceCents: 3900 },
+    ],
+  },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

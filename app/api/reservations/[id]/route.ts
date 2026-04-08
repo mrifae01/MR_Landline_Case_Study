@@ -59,6 +59,17 @@ export async function PATCH(
       );
     }
 
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(passengerEmail)) {
+      return NextResponse.json({ error: "Invalid email address" }, { status: 400 });
+    }
+
+    const digitsOnly = passengerPhone.replace(/\D/g, "");
+    const phoneValid = digitsOnly.length === 10 || (digitsOnly.length === 11 && digitsOnly.startsWith("1"));
+    if (!phoneValid) {
+      return NextResponse.json({ error: "Invalid phone number. Please enter a 10-digit US phone number." }, { status: 400 });
+    }
+
     const reservation = await prisma.reservation.findUnique({
       where: { id },
     });

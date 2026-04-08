@@ -152,7 +152,7 @@ Every call to `GET /api/trips` checks for expired `HELD` reservations across all
 ### 4. Production Readiness
 
 **Branch strategy and development lifecycle:**
-In a production environment, work would flow through three branches: `dev` for active development auto-deployed to a development environment, `staging` for release candidates that mirror production infrastructure for QA, and `main` for production. Feature branches are cut from `dev`, reviewed via pull request, and merged through the pipeline. Nothing reaches production without passing staging first, so every change gets tested in a production-like environment before it affects real users.
+In an ideal production environment, work would flow through three branches: `dev` for active development auto-deployed to a development environment, `stage` for release candidates that mirror production infrastructure for QA, and `master` for production. Feature branches are cut from `dev`, reviewed via pull request, and merged through the pipeline. Nothing reaches production without passing staging first, so every change gets tested in a production-like environment before it affects real users.
 
 **Zero-downtime deployments:**
 Database migrations are committed to version control and applied with `prisma migrate deploy` at deploy time, never `migrate dev` in production. Destructive schema changes like dropping or renaming columns are split across two deploys: first update the application to tolerate both the old and new schema, then clean up the old structure in a follow-up deploy. This allows rolling updates without taking the service offline.
@@ -195,7 +195,6 @@ Claude was used throughout the development process:
 - **Architecture design:** Talking through schema decisions like why to separate `Schedule` from `Trip`, why to use a conditional `UPDATE` instead of a SELECT then UPDATE lock, and how to structure the API before writing any code
 - **Scaffolding:** Setting up Next.js, Docker Compose, the Prisma schema, and the overall project structure
 - **Code generation:** Writing API route handlers, React components, the seed script, email templates, and the seat hold countdown timer flow
-- **Debugging:** Resolving Prisma v7 compatibility issues with datasource URL configuration, a Next.js build error requiring a Suspense boundary around `useSearchParams`, Nodemailer bundling issues with Turbopack, and git branch discrepancies between local and remote
 - **Iteration:** Refining the seat hold flow, the `409` conflict UX, double-click protection on the Select button, and stale seat count refresh when navigating back from the booking form
 
 All generated code was reviewed, tested, and adjusted before committing. The architectural decisions reflect deliberate choices made throughout the process, not just what the AI suggested by default.

@@ -57,14 +57,26 @@ export default function Home() {
   const [bookStep, setBookStep] = useState<BookStep>("search");
   const [origins, setOrigins] = useState<string[]>([]);
   const [allRoutes, setAllRoutes] = useState<{ origin: string; destination: string }[]>([]);
+  const [regions, setRegions] = useState<Record<string, string[]>>({});
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [date, setDate] = useState("");
   const [seatCount, setSeatCount] = useState(1);
-  const destinations = allRoutes.filter((r) => r.origin === origin).map((r) => r.destination);
+  // If origin is selected, filter destinations to valid routes from that origin.
+  // Otherwise show all destinations so the user can pick destination first.
+  const destinations = origin
+    ? allRoutes.filter((r) => r.origin === origin).map((r) => r.destination)
+    : [...new Set(allRoutes.map((r) => r.destination))].sort();
+
+  // If destination is selected, filter origins to only those with a route to it.
+  // Otherwise show all origins.
+  const filteredOrigins = destination
+    ? allRoutes.filter((r) => r.destination === destination).map((r) => r.origin)
+    : origins;
   const [trips, setTrips] = useState<Trip[]>([]);
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
-  const [passengerName, setPassengerName] = useState("");
+  const [passengerFirstName, setPassengerFirstName] = useState("");
+  const [passengerLastName, setPassengerLastName] = useState("");
   const [passengerEmail, setPassengerEmail] = useState("");
   const [passengerPhone, setPassengerPhone] = useState("");
   const [booking, setBooking] = useState<BookingConfirmation | null>(null);
@@ -92,6 +104,7 @@ export default function Home() {
       .then((data) => {
         setOrigins(data.origins);
         setAllRoutes(data.routes);
+        setRegions(data.regions ?? {});
       });
   }, []);
 
@@ -172,7 +185,7 @@ export default function Home() {
     const res = await fetch(`/api/reservations/${holdId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "confirm", passengerName, passengerEmail, passengerPhone }),
+      body: JSON.stringify({ action: "confirm", passengerName: `${passengerFirstName.trim()} ${passengerLastName.trim()}`, passengerEmail, passengerPhone }),
     });
     const data = await res.json();
     setLoading(false);
@@ -202,7 +215,8 @@ export default function Home() {
     setBookStep("search");
     setTrips([]);
     setSelectedTrip(null);
-    setPassengerName("");
+    setPassengerFirstName("");
+    setPassengerLastName("");
     setPassengerEmail("");
     setPassengerPhone("");
     setSeatCount(1);
@@ -335,19 +349,54 @@ export default function Home() {
                 <form onSubmit={handleSearch} className="bg-white rounded-xl shadow-sm border border-zinc-200 p-6 flex flex-col gap-5">
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 mb-1">Origin</label>
-                    <select required value={origin} onChange={(e) => { setOrigin(e.target.value); setDestination(""); }}
+                    <select required value={origin} onChange={(e) => {
+                        const newOrigin = e.target.value;
+                        setOrigin(newOrigin);
+                        // Only reset destination if it is no longer reachable from the new origin
+                        if (destination && !allRoutes.some((r) => r.origin === newOrigin && r.destination === destination)) {
+                          setDestination("");
+                        }
+                      }}
                       className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400">
                       <option value="">Select a pickup location</option>
-                      {origins.map((o) => <option key={o} value={o}>{o}</option>)}
+                      {Object.keys(regions).length > 0
+                        ? Object.entries(regions).map(([region, regionOrigins]) => {
+                            const available = regionOrigins.filter((o) => filteredOrigins.includes(o));
+                            if (available.length === 0) return null;
+                            return (
+                              <optgroup key={region} label={region}>
+                                {available.map((o) => <option key={o} value={o}>{o}</option>)}
+                              </optgroup>
+                            );
+                          })
+                        : filteredOrigins.map((o) => <option key={o} value={o}>{o}</option>)
+                      }
                     </select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 mb-1">Destination</label>
-                    <select required value={destination} onChange={(e) => setDestination(e.target.value)}
-                      className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400"
-                      disabled={!origin}>
+                    <select required value={destination} onChange={(e) => {
+                        const newDest = e.target.value;
+                        setDestination(newDest);
+                        // Only reset origin if it no longer has a route to the new destination
+                        if (origin && !allRoutes.some((r) => r.origin === origin && r.destination === newDest)) {
+                          setOrigin("");
+                        }
+                      }}
+                      className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400">
                       <option value="">Select a destination</option>
-                      {destinations.map((d) => <option key={d} value={d}>{d}</option>)}
+                      {Object.keys(regions).length > 0
+                        ? Object.entries(regions).map(([region, regionDests]) => {
+                            const available = regionDests.filter((d) => destinations.includes(d));
+                            if (available.length === 0) return null;
+                            return (
+                              <optgroup key={region} label={region}>
+                                {available.map((d) => <option key={d} value={d}>{d}</option>)}
+                              </optgroup>
+                            );
+                          })
+                        : destinations.map((d) => <option key={d} value={d}>{d}</option>)
+                      }
                     </select>
                   </div>
                   <div>
@@ -495,22 +544,36 @@ export default function Home() {
                 </div>
                 <form onSubmit={handleBooking} className="bg-white rounded-xl shadow-sm border border-zinc-200 p-6 flex flex-col gap-5">
                   <div>
-                    <label className="block text-sm font-medium text-zinc-700 mb-1">Full Name</label>
-                    <input required type="text" placeholder="Jane Smith" value={passengerName}
-                      onChange={(e) => setPassengerName(e.target.value)}
-                      className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400" />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-sm font-medium text-zinc-700">Name</label>
+                      <span className="text-xs text-zinc-400">Please enter full legal names as they appear on your ID</span>
+                    </div>
+                    <div className="flex gap-3">
+                      <input required type="text" placeholder="First name" value={passengerFirstName}
+                        onChange={(e) => setPassengerFirstName(e.target.value)}
+                        minLength={2}
+                        className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400" />
+                      <input required type="text" placeholder="Last name" value={passengerLastName}
+                        onChange={(e) => setPassengerLastName(e.target.value)}
+                        minLength={2}
+                        className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400" />
+                    </div>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 mb-1">Email Address</label>
                     <input required type="email" placeholder="jane@example.com" value={passengerEmail}
                       onChange={(e) => setPassengerEmail(e.target.value)}
+                      pattern="[^\s@]+@[^\s@]+\.[^\s@]+"
                       className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400" />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 mb-1">Phone Number</label>
-                    <input required type="tel" placeholder="555-123-4567" value={passengerPhone}
+                    <input required type="tel" placeholder="(555) 123-4567" value={passengerPhone}
                       onChange={(e) => setPassengerPhone(e.target.value)}
+                      pattern="^\+?1?\s*[\(\-\.]?\d{3}[\)\-\.\s]?\s*\d{3}[\-\.\s]?\d{4}$"
+                      title="Please enter a valid US phone number (e.g. 555-123-4567)"
                       className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400" />
+                    <p className="text-xs text-zinc-400 mt-1">Format: 555-123-4567 or (555) 123-4567</p>
                   </div>
                   {error && <p className="text-red-600 text-sm">{error}</p>}
                   <button type="submit" disabled={loading}
