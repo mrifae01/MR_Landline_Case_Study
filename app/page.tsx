@@ -77,6 +77,11 @@ export default function Home() {
   const [modifyDate, setModifyDate] = useState("");
   const [modifyTrips, setModifyTrips] = useState<Trip[]>([]);
 
+  // ── Hold state ─────────────────────────────────────────────────────────────
+  const [holdId, setHoldId] = useState<string | null>(null);
+  const [holdExpiresAt, setHoldExpiresAt] = useState<Date | null>(null);
+  const [holdSecondsLeft, setHoldSecondsLeft] = useState(0);
+
   // ── Shared UI state ────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -89,6 +94,28 @@ export default function Home() {
         setAllRoutes(data.routes);
       });
   }, []);
+
+  useEffect(() => {
+    if (!holdExpiresAt) return;
+    const interval = setInterval(() => {
+      const secondsLeft = Math.max(0, Math.floor((holdExpiresAt.getTime() - Date.now()) / 1000));
+      setHoldSecondsLeft(secondsLeft);
+      if (secondsLeft === 0) {
+        clearInterval(interval);
+        setHoldId(null);
+        setHoldExpiresAt(null);
+        setBookStep("results");
+        setError("Your seat hold has expired. Please select a trip again.");
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [holdExpiresAt]);
+
+  function formatCountdown(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
 
   // Clear errors when switching tabs
   function switchTab(tab: "book" | "manage") {
@@ -111,20 +138,64 @@ export default function Home() {
     setBookStep("results");
   }
 
-  async function handleBooking(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSelectTrip(trip: Trip) {
     setError("");
     setLoading(true);
     const res = await fetch("/api/reservations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tripId: selectedTrip!.id, passengerName, passengerEmail, passengerPhone, seatCount }),
+      body: JSON.stringify({ tripId: trip.id, seatCount }),
+    });
+    const data = await res.json();
+    setLoading(false);
+    if (!res.ok) {
+      if (res.status === 409) {
+        setTrips([]);
+        setBookStep("search");
+        setError("Someone just booked the last available seat. Please search again.");
+      } else {
+        setError(data.error ?? "Something went wrong");
+      }
+      return;
+    }
+    setHoldId(data.holdId);
+    setHoldExpiresAt(new Date(data.expiresAt));
+    setHoldSecondsLeft(5 * 60);
+    setSelectedTrip(trip);
+    setBookStep("booking");
+  }
+
+  async function handleBooking(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    const res = await fetch(`/api/reservations/${holdId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "confirm", passengerName, passengerEmail, passengerPhone }),
     });
     const data = await res.json();
     setLoading(false);
     if (!res.ok) { setError(data.error ?? "Something went wrong"); return; }
+    setHoldId(null);
+    setHoldExpiresAt(null);
     setBooking(data);
     setBookStep("confirmation");
+  }
+
+  async function handleBackFromBooking() {
+    if (holdId) {
+      await fetch(`/api/reservations/${holdId}`, { method: "DELETE" });
+      setHoldId(null);
+      setHoldExpiresAt(null);
+    }
+    // Re-fetch trips so seat counts reflect the restored hold
+    const params = new URLSearchParams({ origin, destination, date, seatCount: String(seatCount) });
+    const res = await fetch(`/api/trips?${params}`);
+    const data = await res.json();
+    if (res.ok) setTrips(data.trips);
+    setBookStep("results");
+    setError("");
   }
 
   function handleBookReset() {
@@ -136,6 +207,8 @@ export default function Home() {
     setPassengerPhone("");
     setSeatCount(1);
     setBooking(null);
+    setHoldId(null);
+    setHoldExpiresAt(null);
     setError("");
   }
 
@@ -367,11 +440,11 @@ export default function Home() {
                               <span className="bg-zinc-100 text-zinc-400 font-semibold rounded-lg px-4 py-2 text-sm">Sold Out</span>
                             ) : (
                               <button
-                                onClick={() => { if (bookable) { setSelectedTrip(trip); setBookStep("booking"); } }}
-                                disabled={!bookable}
-                                className={`font-semibold rounded-lg px-4 py-2 transition-colors ${bookable ? "bg-yellow-400 hover:bg-yellow-500 text-black" : "bg-zinc-200 text-zinc-400 cursor-not-allowed"}`}
+                                onClick={() => { if (bookable && !loading) handleSelectTrip(trip); }}
+                                disabled={!bookable || loading}
+                                className={`font-semibold rounded-lg px-4 py-2 transition-colors ${bookable && !loading ? "bg-yellow-400 hover:bg-yellow-500 text-black" : "bg-zinc-200 text-zinc-400 cursor-not-allowed"}`}
                               >
-                                Select
+                                {loading ? "Holding..." : "Select"}
                               </button>
                             )}
                           </div>
@@ -386,8 +459,22 @@ export default function Home() {
             {/* Step 3: Booking Form */}
             {bookStep === "booking" && selectedTrip && (
               <div>
-                <button onClick={() => setBookStep("results")} className="text-sm text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">← Back to results</button>
+                <button onClick={handleBackFromBooking} className="text-sm text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">← Back to results</button>
                 <h2 className="text-2xl font-bold text-zinc-900 mb-6">Passenger Details</h2>
+                {holdSecondsLeft > 0 && (
+                  <div className={`rounded-xl px-5 py-3 mb-4 flex items-center justify-between border ${
+                    holdSecondsLeft < 60
+                      ? "bg-red-50 border-red-200"
+                      : "bg-yellow-50 border-yellow-200"
+                  }`}>
+                    <span className={`text-sm font-medium ${holdSecondsLeft < 60 ? "text-red-700" : "text-yellow-700"}`}>
+                      {holdSecondsLeft < 60 ? "⚠ Hold expiring soon!" : "Seats held for you"}
+                    </span>
+                    <span className={`font-mono font-bold text-lg ${holdSecondsLeft < 60 ? "text-red-700" : "text-yellow-700"}`}>
+                      {formatCountdown(holdSecondsLeft)}
+                    </span>
+                  </div>
+                )}
                 <div className="bg-black text-white rounded-xl p-5 mb-6">
                   <p className="text-zinc-400 text-sm mb-1">{selectedTrip.origin} → {selectedTrip.destination}</p>
                   <div className="flex items-center justify-between">

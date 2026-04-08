@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { sendBookingConfirmation } from "@/lib/email";
 
 // GET /api/reservations?id=X  or  ?email=X
 // Looks up reservations by confirmation ID or passenger email.
@@ -20,7 +19,7 @@ export async function GET(request: NextRequest) {
     where: {
       ...(id ? { id } : {}),
       ...(email ? { passengerEmail: email } : {}),
-      status: { not: "CANCELLED" },
+      status: "CONFIRMED",
     },
     include: {
       trip: {
@@ -55,27 +54,16 @@ export async function GET(request: NextRequest) {
 }
 
 // POST /api/reservations
-// Creates a confirmed booking for a trip.
-// Uses a database transaction to guarantee seat decrement and reservation
-// creation are always atomic — either both happen or neither does.
+// Creates a HELD reservation for a trip (no passenger details yet).
+// Atomically decrements seats — either both happen or neither does.
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { tripId, passengerName, passengerEmail, passengerPhone, seatCount: rawSeatCount } = body;
+  const { tripId, seatCount: rawSeatCount } = body;
   const seatCount = Math.min(9, Math.max(1, Number(rawSeatCount ?? 1)));
 
-  // Validate required fields
-  if (!tripId || !passengerName || !passengerEmail || !passengerPhone) {
+  if (!tripId) {
     return NextResponse.json(
-      { error: "tripId, passengerName, passengerEmail, and passengerPhone are required" },
-      { status: 400 }
-    );
-  }
-
-  // Basic email format check
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(passengerEmail)) {
-    return NextResponse.json(
-      { error: "Invalid email address" },
+      { error: "tripId is required" },
       { status: 400 }
     );
   }
@@ -92,10 +80,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const reservation = await prisma.$transaction(async (tx) => {
-      // Atomically decrement availableSeats — but ONLY if it is still above 0.
-      // The WHERE condition (availableSeats > 0) and the decrement happen in a
-      // single SQL UPDATE, so two simultaneous requests cannot both see "1 seat"
-      // and both succeed. If count === 0, the seat was already taken.
+      // Atomically decrement availableSeats — but ONLY if enough seats remain.
       const updated = await tx.inventory.updateMany({
         where: {
           tripId,
@@ -114,60 +99,27 @@ export async function POST(request: NextRequest) {
       const schedule = await tx.schedule.findFirst({ where: { trips: { some: { id: tripId } } } });
       const totalCost = (schedule?.priceCents ?? 0) * seatCount;
 
-      // Create the confirmed reservation
+      // Create the held reservation with empty passenger fields
       const newReservation = await tx.reservation.create({
         data: {
           tripId,
-          passengerName,
-          passengerEmail,
-          passengerPhone,
+          passengerName: "",
+          passengerEmail: "",
+          passengerPhone: "",
           seatCount,
           totalCost,
-          status: "CONFIRMED",
-        },
-        include: {
-          trip: {
-            include: {
-              schedule: {
-                include: { route: true },
-              },
-            },
-          },
+          status: "HELD",
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
         },
       });
 
       return newReservation;
     });
 
-    const route = reservation.trip.schedule.route;
-    const schedule = reservation.trip.schedule;
-    const priceDisplay = `$${(reservation.totalCost / 100).toFixed(2)}`;
-
-    // Send confirmation email in production only — local reviewers won't have Gmail credentials
-    if (process.env.NODE_ENV === "production") sendBookingConfirmation({
-      to: reservation.passengerEmail,
-      confirmationId: reservation.id,
-      passengerName: reservation.passengerName,
-      origin: route.origin,
-      destination: route.destination,
-      departureDate: reservation.trip.departureDate.toISOString(),
-      departureTime: reservation.trip.schedule.departureTime,
-      arrivalTime: reservation.trip.schedule.arrivalTime,
-      seatCount: reservation.seatCount,
-      priceDisplay,
-    })?.catch((err) => console.error("Email failed:", err));
-
     return NextResponse.json(
       {
-        confirmationId: reservation.id,
-        passengerName: reservation.passengerName,
-        passengerEmail: reservation.passengerEmail,
-        seatCount: reservation.seatCount,
-        origin: route.origin,
-        destination: route.destination,
-        departureTime: schedule.departureTime,
-        arrivalTime: schedule.arrivalTime,
-        priceDisplay,
+        holdId: reservation.id,
+        expiresAt: reservation.expiresAt,
       },
       { status: 201 }
     );
@@ -179,7 +131,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.error("Booking error:", error);
+    console.error("Hold error:", error);
     return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
   }
 }

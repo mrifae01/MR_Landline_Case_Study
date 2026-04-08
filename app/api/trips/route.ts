@@ -29,6 +29,27 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Clean up expired holds before returning results — restore seats to inventory
+  const now = new Date();
+  const expiredHolds = await prisma.reservation.findMany({
+    where: { status: "HELD", expiresAt: { lt: now } },
+    select: { id: true, tripId: true, seatCount: true },
+  });
+  if (expiredHolds.length > 0) {
+    await prisma.$transaction([
+      prisma.reservation.updateMany({
+        where: { id: { in: expiredHolds.map((h) => h.id) } },
+        data: { status: "CANCELLED" },
+      }),
+      ...expiredHolds.map((h) =>
+        prisma.inventory.update({
+          where: { tripId: h.tripId },
+          data: { availableSeats: { increment: h.seatCount } },
+        })
+      ),
+    ]);
+  }
+
   // Find all scheduled trips on that date for the requested route.
   // We join through schedule → route to filter by origin and destination.
   // We also pull in inventory so we can show available seats.

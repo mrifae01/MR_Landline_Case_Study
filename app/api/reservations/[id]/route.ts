@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { sendBookingConfirmation } from "@/lib/email";
 
 // DELETE /api/reservations/:id
 // Cancels a reservation and restores the seat to inventory.
@@ -37,14 +38,101 @@ export async function DELETE(
 }
 
 // PATCH /api/reservations/:id
-// Modifies a reservation by switching it to a different trip.
-// Cancels the old reservation and creates a new one atomically.
+// Handles two actions:
+//   action: "confirm" — confirms a HELD reservation with passenger details
+//   newTripId — modifies a reservation by switching it to a different trip
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
   const body = await request.json();
+
+  // ── Confirm a held reservation ──────────────────────────────────────────────
+  if (body.action === "confirm") {
+    const { passengerName, passengerEmail, passengerPhone } = body;
+
+    if (!passengerName || !passengerEmail || !passengerPhone) {
+      return NextResponse.json(
+        { error: "passengerName, passengerEmail, and passengerPhone are required" },
+        { status: 400 }
+      );
+    }
+
+    const reservation = await prisma.reservation.findUnique({
+      where: { id },
+    });
+
+    if (!reservation) {
+      return NextResponse.json({ error: "Reservation not found" }, { status: 404 });
+    }
+
+    if (reservation.status !== "HELD") {
+      return NextResponse.json({ error: "Reservation is not in a held state" }, { status: 409 });
+    }
+
+    const now = new Date();
+    if (!reservation.expiresAt || reservation.expiresAt <= now) {
+      return NextResponse.json(
+        { error: "Hold has expired. Please select a trip again." },
+        { status: 409 }
+      );
+    }
+
+    const confirmed = await prisma.$transaction(async (tx) => {
+      return tx.reservation.update({
+        where: { id },
+        data: {
+          status: "CONFIRMED",
+          passengerName,
+          passengerEmail,
+          passengerPhone,
+          expiresAt: null,
+        },
+        include: {
+          trip: {
+            include: {
+              schedule: {
+                include: { route: true },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    const route = confirmed.trip.schedule.route;
+    const schedule = confirmed.trip.schedule;
+    const priceDisplay = `$${(confirmed.totalCost / 100).toFixed(2)}`;
+
+    // Send confirmation email in production only
+    if (process.env.NODE_ENV === "production") sendBookingConfirmation({
+      to: confirmed.passengerEmail,
+      confirmationId: confirmed.id,
+      passengerName: confirmed.passengerName,
+      origin: route.origin,
+      destination: route.destination,
+      departureDate: confirmed.trip.departureDate.toISOString(),
+      departureTime: schedule.departureTime,
+      arrivalTime: schedule.arrivalTime,
+      seatCount: confirmed.seatCount,
+      priceDisplay,
+    })?.catch((err) => console.error("Email failed:", err));
+
+    return NextResponse.json({
+      confirmationId: confirmed.id,
+      passengerName: confirmed.passengerName,
+      passengerEmail: confirmed.passengerEmail,
+      seatCount: confirmed.seatCount,
+      origin: route.origin,
+      destination: route.destination,
+      departureTime: schedule.departureTime,
+      arrivalTime: schedule.arrivalTime,
+      priceDisplay,
+    });
+  }
+
+  // ── Modify a reservation (switch to a different trip) ───────────────────────
   const { newTripId } = body;
 
   if (!newTripId) {
