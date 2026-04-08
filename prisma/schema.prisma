@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum TripStatus {
+  SCHEDULED
+  CANCELLED
+  COMPLETED
+}
+
+enum ReservationStatus {
+  HELD
+  CONFIRMED
+  CANCELLED
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+// A route is a fixed origin → destination pair (e.g. MSP → Rochester).
+// Routes never change — they are the foundation everything else builds on.
+model Route {
+  id          String     @id @default(uuid())
+  origin      String
+  destination String
+  createdAt   DateTime   @default(now())
+
+  schedules   Schedule[]
+
+  @@unique([origin, destination])
+}
+
+// A schedule is a recurring timetable entry for a route.
+// It defines what time the shuttle departs, which days it runs, and what it costs.
+// One schedule can generate many trips (one per calendar date it runs).
+model Schedule {
+  id            String   @id @default(uuid())
+  routeId       String
+  departureTime String   // "08:00" — stored as HH:MM string
+  arrivalTime   String   // "10:15"
+  daysOfWeek    Int[]    // [1,2,3,4,5] = Mon–Fri  (0=Sun, 6=Sat)
+  priceCents    Int      // Price in cents — avoids floating-point issues
+  createdAt     DateTime @default(now())
+
+  route         Route    @relation(fields: [routeId], references: [id])
+  trips         Trip[]
+}
+
+// A trip is a concrete instance of a schedule on a specific calendar date.
+// This is the actual thing a passenger books.
+model Trip {
+  id            String     @id @default(uuid())
+  scheduleId    String
+  departureDate DateTime   @db.Date
+  status        TripStatus @default(SCHEDULED)
+  createdAt     DateTime   @default(now())
+
+  schedule      Schedule   @relation(fields: [scheduleId], references: [id])
+  inventory     Inventory?
+  reservations  Reservation[]
+}
+
+// Inventory tracks seat availability for a specific trip.
+// It has a 1:1 relationship with Trip.
+// availableSeats is decremented on booking and incremented on cancellation.
+model Inventory {
+  id              String   @id @default(uuid())
+  tripId          String   @unique
+  totalSeats      Int
+  availableSeats  Int
+  updatedAt       DateTime @updatedAt
+
+  trip            Trip     @relation(fields: [tripId], references: [id])
+}
+
+// A reservation is a passenger's booking against a trip.
+// status = HELD means the seat is temporarily reserved during checkout (expires in 10 min).
+// status = CONFIRMED means the booking is complete.
+// status = CANCELLED means it was cancelled — seats are returned to inventory.
+model Reservation {
+  id               String            @id @default(uuid())
+  tripId           String
+  passengerName    String
+  passengerEmail   String
+  passengerPhone   String
+  seatCount        Int               @default(1)
+  totalCost        Int               @default(0) // Total price in cents at time of booking (priceCents × seatCount)
+  status           ReservationStatus @default(HELD)
+  expiresAt        DateTime?         // Only set for HELD reservations
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  trip             Trip              @relation(fields: [tripId], references: [id])
+}

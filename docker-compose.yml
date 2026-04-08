@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: landline_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: landline
+      POSTGRES_PASSWORD: landline_password
+      POSTGRES_DB: landline_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # The app service is used for the final containerized deployment.
+  # During local development, run the app with: npm run dev
+  # app:
+  #   build: .
+  #   container_name: landline_app
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - db
+  #   environment:
+  #     DATABASE_URL: postgresql://landline:landline_password@db:5432/landline_dev
+  #     NODE_ENV: production
+  #   ports:
+  #     - "3000:3000"
+
+volumes:
+  postgres_data:
