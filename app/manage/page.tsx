@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -35,6 +35,14 @@ type Step = "lookup" | "view" | "modify-search" | "modify-results";
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ManagePage() {
+  return (
+    <Suspense>
+      <ManagePageInner />
+    </Suspense>
+  );
+}
+
+function ManagePageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
