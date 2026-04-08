@@ -1,6 +1,13 @@
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+});
+
 const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
 interface BookingEmailParams {
@@ -38,8 +45,8 @@ export async function sendBookingConfirmation(params: BookingEmailParams) {
     timeZone: "UTC",
   });
 
-  await resend.emails.send({
-    from: "Mitchel Rifae's Shuttle Booking <onboarding@resend.dev>",
+  await transporter.sendMail({
+    from: `"Mitchel Rifae's Shuttle Booking" <${process.env.GMAIL_USER}>`,
     to,
     subject: `Booking Confirmed — ${origin} → ${destination} on ${formattedDate}`,
     html: `

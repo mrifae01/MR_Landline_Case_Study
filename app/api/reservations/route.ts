@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
     const schedule = reservation.trip.schedule;
     const priceDisplay = `$${(reservation.totalCost / 100).toFixed(2)}`;
 
-    // Send confirmation email in production only — local reviewers won't have a Resend API key
+    // Send confirmation email in production only — local reviewers won't have Gmail credentials
     if (process.env.NODE_ENV === "production") sendBookingConfirmation({
       to: reservation.passengerEmail,
       confirmationId: reservation.id,
