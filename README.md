@@ -51,6 +51,12 @@ DATABASE_URL="postgresql://landline:landline_password@localhost:5432/landline_de
 
 > **Note:** Email confirmations are only sent in production (`NODE_ENV=production`) and require Gmail SMTP credentials configured as environment variables. No email setup is needed to run and test the app locally.
 
+### Testing the API
+
+The full booking flow can be tested through the frontend at [http://localhost:3000](http://localhost:3000) or directly against the API using the included request collection.
+
+**`api-test.http`** covers every endpoint in order: searching trips, holding a seat, confirming a booking, round-trip booking, lookup, cancel, and modify. It works with the [VS Code REST Client](https://marketplace.visualstudio.com/items?itemName=humao.rest-client) extension or any JetBrains IDE. Open the file, run requests top to bottom, and substitute the IDs returned by each response into the next request where marked.
+
 ### Useful Commands
 
 ```bash
@@ -66,7 +72,8 @@ npx tsx prisma/seed.ts   # Re-seed routes, schedules, and trips
 
 ### 1. Database Schema
 
-The schema is built around five core entities: **Routes**, **Schedules**, **Trips**, **Inventory**, and **Reservations**.
+The schema is built around five core entities: **Routes**, **Schedules**, **Trips**, **Inventory**, and **Reservations**. 
+When building database schemas, I think it is important to make each table responsible for as few concerns as possible. If too much is packed into a single table, changes to one part of the system can unintentionally affect unrelated data like historical reservations. Keeping the entities separate also means queries stay focused and indexes stay narrow, which matters as the data grows.
 
 ```
 Route ──< Schedule ──< Trip ──── Inventory
@@ -75,7 +82,7 @@ Route ──< Schedule ──< Trip ──── Inventory
 
 **`Route`** is a static origin/destination pair (e.g. Fort Collins to Denver International Airport). Routes serve as the foundation everything else builds on and are enforced unique on `(origin, destination)`.
 
-**`Schedule`** is a recurring timetable entry attached to a route, storing departure/arrival time, days of the week the service runs, and price in cents. Think of it as "the 6:30 AM Fort Collins run, every day, $29." Keeping schedules separate from trips means timetable and pricing changes never affect historical reservation data.
+**`Schedule`** is a recurring timetable entry attached to a route, storing departure/arrival time, days of the week the service runs, and price in cents. Think of it as "the 6:30 AM Fort Collins run, every day, $29." Keeping schedules separate from trips means timetable and pricing changes never affect historical reservation data. In simple terms, every record in the Schedule table is a template for the trips that get generated from it.
 
 **`Trip`** is a concrete instance of a schedule on a specific calendar date and is the actual thing a passenger books. Trips are pre-generated from their parent schedule for a 30-day rolling window, which keeps availability queries fast with no on-the-fly date math at query time.
 
@@ -104,7 +111,8 @@ The API follows REST conventions using Next.js App Router route handlers:
 | `GET` | `/api/reservations?id=X` or `?email=X` | Looks up confirmed reservations by confirmation ID or passenger email |
 | `POST` | `/api/reservations` | Creates a `HELD` reservation for `{ tripId, seatCount }`, atomically decrements inventory, and returns `{ holdId, expiresAt }` |
 | `PATCH` | `/api/reservations/:id` | Handles two actions: `{ action: "confirm", passengerName, passengerEmail, passengerPhone }` confirms a hold and sends a confirmation email in production. `{ newTripId }` moves a confirmed booking to a different trip atomically. |
-| `DELETE` | `/api/reservations/:id` | Cancels a reservation (held or confirmed) and restores seats to inventory |
+| `DELETE` | `/api/reservations/:id` | Cancels a reservation (held or confirmed) and restores seats to inventory. Pass `?cancelGroup=true` to atomically cancel both legs of a round trip. |
+| `POST` | `/api/bookings/confirm` | Confirms both legs of a round-trip booking in a single transaction given `{ outboundHoldId, inboundHoldId, passengerName, passengerEmail, passengerPhone }` |
 
 **Booking flow:**
 1. User searches by origin, destination, and date → `GET /api/trips`
@@ -156,6 +164,7 @@ In an ideal production environment, work would flow through three branches: `dev
 
 **Zero-downtime deployments:**
 Database migrations are committed to version control and applied with `prisma migrate deploy` at deploy time, never `migrate dev` in production. Destructive schema changes like dropping or renaming columns are split across two deploys: first update the application to tolerate both the old and new schema, then clean up the old structure in a follow-up deploy. This allows rolling updates without taking the service offline.
+For frontend or full-redeployment changes, it is best to ship during off-peak hours. Logs and traffic metrics would tell you when usage is lowest, there are no truly quiet hours on a live system, but there is always a window with less risk. If the system runs on Kubernetes, rolling restarts are important so that a bad image does not take down all pods at once, only a subset of traffic is affected while the issue is caught and rolled back.
 
 **Observability:**
 All booking errors are caught and logged with full context via `console.error`. In production these would be forwarded to an error aggregator like Sentry and logs shipped to a queryable store like Datadog or Logtail. Key metrics worth tracking in a real deployment are hold-to-confirm conversion rate, `409` conflict rate (a signal of high contention on popular trips), and hold expiry rate (a signal that users are abandoning the checkout form).
@@ -188,13 +197,12 @@ The schema is designed to grow additively. New columns, tables, and relationship
 
 ## AI Tools Used
 
-This project was built with assistance from **Claude Code** (Anthropic).
+This project was built with assistance from **Claude Code**.
 
 Claude was used throughout the development process:
 
 - **Architecture design:** Talking through schema decisions like why to separate `Schedule` from `Trip`, why to use a conditional `UPDATE` instead of a SELECT then UPDATE lock, and how to structure the API before writing any code
 - **Scaffolding:** Setting up Next.js, Docker Compose, the Prisma schema, and the overall project structure
 - **Code generation:** Writing API route handlers, React components, the seed script, email templates, and the seat hold countdown timer flow
-- **Iteration:** Refining the seat hold flow, the `409` conflict UX, double-click protection on the Select button, and stale seat count refresh when navigating back from the booking form
 
 All generated code was reviewed, tested, and adjusted before committing. The architectural decisions reflect deliberate choices made throughout the process, not just what the AI suggested by default.

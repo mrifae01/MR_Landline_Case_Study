@@ -12,19 +12,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
-  # The app service is used for the final containerized deployment.
-  # During local development, run the app with: npm run dev
-  # app:
-  #   build: .
-  #   container_name: landline_app
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - db
-  #   environment:
-  #     DATABASE_URL: postgresql://landline:landline_password@db:5432/landline_dev
-  #     NODE_ENV: production
-  #   ports:
-  #     - "3000:3000"
 
 volumes:
   postgres_data:

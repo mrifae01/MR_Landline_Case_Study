@@ -1,0 +1,144 @@
+# Mitchel Rifae's Shuttle Booking — API Request Collection
+# Compatible with the VS Code REST Client extension and JetBrains HTTP Client.
+#
+# HOW TO USE:
+#   1. Start the app locally (npm run dev)
+#   2. Run requests top to bottom — each step uses output from the previous one
+#   3. Replace placeholder IDs (marked with <REPLACE>) with real values from each response
+
+@baseUrl = http://localhost:3000
+
+###############################################################################
+# STEP 1 — Get available routes (origins and destinations)
+###############################################################################
+
+GET {{baseUrl}}/api/routes
+
+
+###############################################################################
+# STEP 2 — Search for available trips
+# Adjust origin, destination, and date to match seeded data in your local DB.
+###############################################################################
+
+GET {{baseUrl}}/api/trips?origin=Fort Collins&destination=Denver International Airport&date=2026-04-15&seatCount=1
+
+
+###############################################################################
+# ONE-WAY BOOKING FLOW
+###############################################################################
+
+# STEP 3A — Hold a seat (replace tripId with a real ID from Step 2 response)
+# Returns: { holdId, expiresAt }
+# You have 5 minutes to complete Step 4A before the hold expires.
+
+POST {{baseUrl}}/api/reservations
+Content-Type: application/json
+
+{
+  "tripId": "<REPLACE: trip id from Step 2>",
+  "seatCount": 1
+}
+
+
+###############################################################################
+# STEP 4A — Confirm the hold with passenger details
+# Replace the ID in the URL with holdId from Step 3A.
+# Returns: { confirmationId, passengerName, origin, destination, departureTime, arrivalTime, priceDisplay }
+
+PATCH {{baseUrl}}/api/reservations/<REPLACE: holdId from Step 3A>
+Content-Type: application/json
+
+{
+  "action": "confirm",
+  "passengerName": "Jane Smith",
+  "passengerEmail": "jane@example.com",
+  "passengerPhone": "555-123-4567"
+}
+
+
+###############################################################################
+# STEP 5A — Look up the confirmed booking
+# Replace with the confirmationId from Step 4A.
+
+GET {{baseUrl}}/api/reservations?id=<REPLACE: confirmationId from Step 4A>
+
+
+###############################################################################
+# ROUND-TRIP BOOKING FLOW
+###############################################################################
+
+# STEP 3B — Search for return trips (origin/destination reversed)
+
+GET {{baseUrl}}/api/trips?origin=Denver International Airport&destination=Fort Collins&date=2026-04-18&seatCount=1
+
+
+# STEP 4B — Hold outbound seat
+# Returns: { holdId, expiresAt }
+
+POST {{baseUrl}}/api/reservations
+Content-Type: application/json
+
+{
+  "tripId": "<REPLACE: outbound trip id from Step 2>",
+  "seatCount": 1,
+  "bookingGroupId": "test-group-id-001"
+}
+
+
+# STEP 5B — Hold return seat (same bookingGroupId links them as a round trip)
+# Returns: { holdId, expiresAt }
+
+POST {{baseUrl}}/api/reservations
+Content-Type: application/json
+
+{
+  "tripId": "<REPLACE: return trip id from Step 3B>",
+  "seatCount": 1,
+  "bookingGroupId": "test-group-id-001"
+}
+
+
+# STEP 6B — Confirm both legs atomically
+# Replace both hold IDs with values from Steps 4B and 5B.
+# Returns: { bookingGroupId, outbound: {...}, inbound: {...}, totalPriceDisplay }
+
+POST {{baseUrl}}/api/bookings/confirm
+Content-Type: application/json
+
+{
+  "outboundHoldId": "<REPLACE: holdId from Step 4B>",
+  "inboundHoldId": "<REPLACE: holdId from Step 5B>",
+  "passengerName": "Jane Smith",
+  "passengerEmail": "jane@example.com",
+  "passengerPhone": "555-123-4567"
+}
+
+
+###############################################################################
+# MANAGE BOOKING
+###############################################################################
+
+# Look up by email (returns all confirmed reservations for that passenger)
+
+GET {{baseUrl}}/api/reservations?email=jane@example.com
+
+
+# Cancel a single reservation (restores seat to inventory)
+
+DELETE {{baseUrl}}/api/reservations/<REPLACE: confirmationId>
+
+
+# Cancel an entire round trip (cancels both legs atomically)
+
+DELETE {{baseUrl}}/api/reservations/<REPLACE: confirmationId>?cancelGroup=true
+
+
+# Modify a booking — switch to a different trip on the same route
+# Returns a new confirmationId; old reservation is cancelled atomically.
+
+PATCH {{baseUrl}}/api/reservations/<REPLACE: confirmationId>
+Content-Type: application/json
+
+{
+  "newTripId": "<REPLACE: new trip id from /api/trips>"
+}
