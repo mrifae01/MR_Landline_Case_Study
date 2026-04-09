@@ -18,15 +18,29 @@ interface Trip {
 }
 
 interface BookingConfirmation {
-  confirmationId: string;
+  bookingGroupId?: string;
   passengerName: string;
   passengerEmail: string;
-  origin: string;
-  destination: string;
-  departureTime: string;
-  arrivalTime: string;
-  priceDisplay: string;
-  seatCount: number;
+  tripType: "one-way" | "round-trip";
+  outbound: {
+    confirmationId: string;
+    origin: string;
+    destination: string;
+    departureTime: string;
+    arrivalTime: string;
+    priceDisplay: string;
+    seatCount: number;
+  };
+  inbound?: {
+    confirmationId: string;
+    origin: string;
+    destination: string;
+    departureTime: string;
+    arrivalTime: string;
+    priceDisplay: string;
+    seatCount: number;
+  };
+  totalPriceDisplay: string;
 }
 
 interface ManagedReservation {
@@ -43,9 +57,10 @@ interface ManagedReservation {
   seatCount: number;
   priceDisplay: string;
   tripId: string;
+  bookingGroupId?: string | null;
 }
 
-type BookStep = "search" | "results" | "booking" | "confirmation";
+type BookStep = "search" | "results" | "return-results" | "booking" | "confirmation";
 type ManageStep = "lookup" | "view" | "modify-search" | "modify-results";
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -62,6 +77,9 @@ export default function Home() {
   const [destination, setDestination] = useState("");
   const [date, setDate] = useState("");
   const [seatCount, setSeatCount] = useState(1);
+  const [tripType, setTripType] = useState<"one-way" | "round-trip">("one-way");
+  const [returnDate, setReturnDate] = useState("");
+
   // If origin is selected, filter destinations to valid routes from that origin.
   // Otherwise show all destinations so the user can pick destination first.
   const destinations = origin
@@ -73,8 +91,12 @@ export default function Home() {
   const filteredOrigins = destination
     ? allRoutes.filter((r) => r.destination === destination).map((r) => r.origin)
     : origins;
+
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
+  const [outboundTrip, setOutboundTrip] = useState<Trip | null>(null);
+  const [inboundTrip, setInboundTrip] = useState<Trip | null>(null);
+  const [inboundTrips, setInboundTrips] = useState<Trip[]>([]);
+
   const [passengerFirstName, setPassengerFirstName] = useState("");
   const [passengerLastName, setPassengerLastName] = useState("");
   const [passengerEmail, setPassengerEmail] = useState("");
@@ -90,9 +112,12 @@ export default function Home() {
   const [modifyTrips, setModifyTrips] = useState<Trip[]>([]);
 
   // ── Hold state ─────────────────────────────────────────────────────────────
-  const [holdId, setHoldId] = useState<string | null>(null);
-  const [holdExpiresAt, setHoldExpiresAt] = useState<Date | null>(null);
+  const [outboundHoldId, setOutboundHoldId] = useState<string | null>(null);
+  const [inboundHoldId, setInboundHoldId] = useState<string | null>(null);
+  const [outboundExpiresAt, setOutboundExpiresAt] = useState<Date | null>(null);
+  const [inboundExpiresAt, setInboundExpiresAt] = useState<Date | null>(null);
   const [holdSecondsLeft, setHoldSecondsLeft] = useState(0);
+  const [bookingGroupId, setBookingGroupId] = useState<string | null>(null);
 
   // ── Shared UI state ────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
@@ -108,21 +133,28 @@ export default function Home() {
       });
   }, []);
 
+  // Countdown: show the minimum remaining time across all active holds
   useEffect(() => {
-    if (!holdExpiresAt) return;
+    const expiries = [outboundExpiresAt, inboundExpiresAt].filter(Boolean) as Date[];
+    if (expiries.length === 0) return;
+
     const interval = setInterval(() => {
-      const secondsLeft = Math.max(0, Math.floor((holdExpiresAt.getTime() - Date.now()) / 1000));
+      const now = Date.now();
+      const minExpiry = Math.min(...expiries.map((d) => d.getTime()));
+      const secondsLeft = Math.max(0, Math.floor((minExpiry - now) / 1000));
       setHoldSecondsLeft(secondsLeft);
       if (secondsLeft === 0) {
         clearInterval(interval);
-        setHoldId(null);
-        setHoldExpiresAt(null);
+        setOutboundHoldId(null);
+        setInboundHoldId(null);
+        setOutboundExpiresAt(null);
+        setInboundExpiresAt(null);
         setBookStep("results");
         setError("Your seat hold has expired. Please select a trip again.");
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [holdExpiresAt]);
+  }, [outboundExpiresAt, inboundExpiresAt]);
 
   function formatCountdown(seconds: number): string {
     const m = Math.floor(seconds / 60);
@@ -154,10 +186,11 @@ export default function Home() {
   async function handleSelectTrip(trip: Trip) {
     setError("");
     setLoading(true);
+    const newGroupId = crypto.randomUUID();
     const res = await fetch("/api/reservations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tripId: trip.id, seatCount }),
+      body: JSON.stringify({ tripId: trip.id, seatCount, bookingGroupId: newGroupId }),
     });
     const data = await res.json();
     setLoading(false);
@@ -171,10 +204,53 @@ export default function Home() {
       }
       return;
     }
-    setHoldId(data.holdId);
-    setHoldExpiresAt(new Date(data.expiresAt));
+    setOutboundHoldId(data.holdId);
+    setOutboundExpiresAt(new Date(data.expiresAt));
     setHoldSecondsLeft(5 * 60);
-    setSelectedTrip(trip);
+    setOutboundTrip(trip);
+    setBookingGroupId(newGroupId);
+
+    if (tripType === "round-trip") {
+      // Fetch return trips (origin/destination swapped)
+      const returnParams = new URLSearchParams({
+        origin: trip.destination,
+        destination: origin,
+        date: returnDate,
+        seatCount: String(seatCount),
+      });
+      const returnRes = await fetch(`/api/trips?${returnParams}`);
+      const returnData = await returnRes.json();
+      if (returnRes.ok) {
+        setInboundTrips(returnData.trips);
+      }
+      setBookStep("return-results");
+    } else {
+      setBookStep("booking");
+    }
+  }
+
+  async function handleSelectReturnTrip(trip: Trip) {
+    setError("");
+    setLoading(true);
+    const res = await fetch("/api/reservations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tripId: trip.id, seatCount, bookingGroupId }),
+    });
+    const data = await res.json();
+    setLoading(false);
+    if (!res.ok) {
+      if (res.status === 409) {
+        setInboundTrips([]);
+        setError("Someone just booked the last available seat on the return trip. Please choose another.");
+      } else {
+        setError(data.error ?? "Something went wrong");
+      }
+      return;
+    }
+    setInboundHoldId(data.holdId);
+    setInboundExpiresAt(new Date(data.expiresAt));
+    setInboundTrip(trip);
     setBookStep("booking");
   }
 
@@ -182,27 +258,108 @@ export default function Home() {
     e.preventDefault();
     setError("");
     setLoading(true);
-    const res = await fetch(`/api/reservations/${holdId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "confirm", passengerName: `${passengerFirstName.trim()} ${passengerLastName.trim()}`, passengerEmail, passengerPhone }),
-    });
-    const data = await res.json();
-    setLoading(false);
-    if (!res.ok) { setError(data.error ?? "Something went wrong"); return; }
-    setHoldId(null);
-    setHoldExpiresAt(null);
-    setBooking(data);
-    setBookStep("confirmation");
+    const passengerName = `${passengerFirstName.trim()} ${passengerLastName.trim()}`;
+
+    if (tripType === "round-trip" && outboundHoldId && inboundHoldId) {
+      const res = await fetch("/api/bookings/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outboundHoldId, inboundHoldId, passengerName, passengerEmail, passengerPhone }),
+      });
+      const data = await res.json();
+      setLoading(false);
+      if (!res.ok) { setError(data.error ?? "Something went wrong"); return; }
+      setOutboundHoldId(null);
+      setInboundHoldId(null);
+      setOutboundExpiresAt(null);
+      setInboundExpiresAt(null);
+      setBooking({
+        bookingGroupId: data.bookingGroupId,
+        passengerName: data.passengerName,
+        passengerEmail: data.passengerEmail,
+        tripType: "round-trip",
+        outbound: data.outbound,
+        inbound: data.inbound,
+        totalPriceDisplay: data.totalPriceDisplay,
+      });
+      setBookStep("confirmation");
+    } else {
+      // One-way flow
+      const res = await fetch(`/api/reservations/${outboundHoldId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "confirm", passengerName, passengerEmail, passengerPhone }),
+      });
+      const data = await res.json();
+      setLoading(false);
+      if (!res.ok) { setError(data.error ?? "Something went wrong"); return; }
+      setOutboundHoldId(null);
+      setOutboundExpiresAt(null);
+      setBooking({
+        passengerName: data.passengerName,
+        passengerEmail: data.passengerEmail,
+        tripType: "one-way",
+        outbound: {
+          confirmationId: data.confirmationId,
+          origin: data.origin,
+          destination: data.destination,
+          departureTime: data.departureTime,
+          arrivalTime: data.arrivalTime,
+          priceDisplay: data.priceDisplay,
+          seatCount: data.seatCount,
+        },
+        totalPriceDisplay: data.priceDisplay,
+      });
+      setBookStep("confirmation");
+    }
   }
 
   async function handleBackFromBooking() {
-    if (holdId) {
-      await fetch(`/api/reservations/${holdId}`, { method: "DELETE" });
-      setHoldId(null);
-      setHoldExpiresAt(null);
+    if (tripType === "round-trip") {
+      // Cancel both holds
+      if (outboundHoldId) {
+        await fetch(`/api/reservations/${outboundHoldId}`, { method: "DELETE" });
+        setOutboundHoldId(null);
+        setOutboundExpiresAt(null);
+      }
+      if (inboundHoldId) {
+        await fetch(`/api/reservations/${inboundHoldId}`, { method: "DELETE" });
+        setInboundHoldId(null);
+        setInboundExpiresAt(null);
+      }
+      setOutboundTrip(null);
+      setInboundTrip(null);
+      setInboundTrips([]);
+      setBookingGroupId(null);
+    } else {
+      if (outboundHoldId) {
+        await fetch(`/api/reservations/${outboundHoldId}`, { method: "DELETE" });
+        setOutboundHoldId(null);
+        setOutboundExpiresAt(null);
+      }
+      setOutboundTrip(null);
     }
     // Re-fetch trips so seat counts reflect the restored hold
+    const params = new URLSearchParams({ origin, destination, date, seatCount: String(seatCount) });
+    const res = await fetch(`/api/trips?${params}`);
+    const data = await res.json();
+    if (res.ok) setTrips(data.trips);
+    setBookStep("results");
+    setError("");
+  }
+
+  async function handleBackFromReturnResults() {
+    // Cancel the outbound hold
+    if (outboundHoldId) {
+      await fetch(`/api/reservations/${outboundHoldId}`, { method: "DELETE" });
+      setOutboundHoldId(null);
+      setOutboundExpiresAt(null);
+    }
+    setOutboundTrip(null);
+    setBookingGroupId(null);
+    setInboundTrips([]);
+
+    // Re-fetch outbound trips
     const params = new URLSearchParams({ origin, destination, date, seatCount: String(seatCount) });
     const res = await fetch(`/api/trips?${params}`);
     const data = await res.json();
@@ -214,26 +371,32 @@ export default function Home() {
   function handleBookReset() {
     setBookStep("search");
     setTrips([]);
-    setSelectedTrip(null);
+    setOutboundTrip(null);
+    setInboundTrip(null);
+    setInboundTrips([]);
     setPassengerFirstName("");
     setPassengerLastName("");
     setPassengerEmail("");
     setPassengerPhone("");
     setSeatCount(1);
     setBooking(null);
-    setHoldId(null);
-    setHoldExpiresAt(null);
+    setOutboundHoldId(null);
+    setInboundHoldId(null);
+    setOutboundExpiresAt(null);
+    setInboundExpiresAt(null);
+    setBookingGroupId(null);
+    setTripType("one-way");
+    setReturnDate("");
     setError("");
   }
 
   // ── Manage handlers ────────────────────────────────────────────────────────
 
-  async function handleLookup(e: React.FormEvent) {
-    e.preventDefault();
+  async function lookupReservations(query: string) {
     setError("");
     setLoading(true);
-    const isId = !manageQuery.includes("@");
-    const params = new URLSearchParams(isId ? { id: manageQuery } : { email: manageQuery });
+    const isId = !query.includes("@");
+    const params = new URLSearchParams(isId ? { id: query } : { email: query });
     const res = await fetch(`/api/reservations?${params}`);
     const data = await res.json();
     setLoading(false);
@@ -241,6 +404,11 @@ export default function Home() {
     if (data.reservations.length === 0) { setError("No bookings found. Check your confirmation ID or email."); return; }
     setManagedReservations(data.reservations);
     setManageStep("view");
+  }
+
+  async function handleLookup(e: React.FormEvent) {
+    e.preventDefault();
+    await lookupReservations(manageQuery);
   }
 
   async function handleCancel(reservation: ManagedReservation) {
@@ -253,6 +421,20 @@ export default function Home() {
     if (!res.ok) { setError(data.error ?? "Something went wrong"); return; }
     // Remove the cancelled reservation from the list
     setManagedReservations((prev) => prev.filter((r) => r.id !== reservation.id));
+  }
+
+  async function handleCancelGroup(reservation: ManagedReservation) {
+    if (!confirm(`Cancel your entire round trip (both legs)?`)) return;
+    setError("");
+    setLoading(true);
+    const res = await fetch(`/api/reservations/${reservation.id}?cancelGroup=true`, { method: "DELETE" });
+    const data = await res.json();
+    setLoading(false);
+    if (!res.ok) { setError(data.error ?? "Something went wrong"); return; }
+    // Remove both legs from the list
+    setManagedReservations((prev) =>
+      prev.filter((r) => r.bookingGroupId !== reservation.bookingGroupId)
+    );
   }
 
   function handleStartModify(reservation: ManagedReservation) {
@@ -292,7 +474,21 @@ export default function Home() {
     setLoading(false);
     if (!res.ok) { setError(data.error ?? "Something went wrong"); return; }
     // Show the new confirmation in the book tab
-    setBooking(data);
+    setBooking({
+      passengerName: data.passengerName,
+      passengerEmail: data.passengerEmail,
+      tripType: "one-way",
+      outbound: {
+        confirmationId: data.confirmationId,
+        origin: data.origin,
+        destination: data.destination,
+        departureTime: data.departureTime,
+        arrivalTime: data.arrivalTime,
+        priceDisplay: data.priceDisplay,
+        seatCount: data.seatCount,
+      },
+      totalPriceDisplay: data.priceDisplay,
+    });
     setBookStep("confirmation");
     setActiveTab("book");
     setManageStep("lookup");
@@ -347,6 +543,19 @@ export default function Home() {
                 <h1 className="text-2xl font-bold text-zinc-900 mb-1">Book a Shuttle</h1>
                 <p className="text-zinc-500 mb-8">Select your route and travel date to see available trips.</p>
                 <form onSubmit={handleSearch} className="bg-white rounded-xl shadow-sm border border-zinc-200 p-6 flex flex-col gap-5">
+
+                  {/* One Way / Round Trip toggle */}
+                  <div className="flex rounded-lg overflow-hidden border border-zinc-300">
+                    <button type="button" onClick={() => setTripType("one-way")}
+                      className={`flex-1 py-2 text-sm font-medium transition-colors ${tripType === "one-way" ? "bg-yellow-400 text-black" : "bg-white text-zinc-600 hover:bg-zinc-50"}`}>
+                      One Way
+                    </button>
+                    <button type="button" onClick={() => setTripType("round-trip")}
+                      className={`flex-1 py-2 text-sm font-medium transition-colors ${tripType === "round-trip" ? "bg-yellow-400 text-black" : "bg-white text-zinc-600 hover:bg-zinc-50"}`}>
+                      Round Trip
+                    </button>
+                  </div>
+
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 mb-1">Origin</label>
                     <select required value={origin} onChange={(e) => {
@@ -405,6 +614,15 @@ export default function Home() {
                       onChange={(e) => setDate(e.target.value)}
                       className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400" />
                   </div>
+                  {tripType === "round-trip" && (
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 mb-1">Return Date</label>
+                      <input required={tripType === "round-trip"} type="date" value={returnDate}
+                        min={date || new Date().toISOString().split("T")[0]}
+                        onChange={(e) => setReturnDate(e.target.value)}
+                        className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400" />
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 mb-1">Number of Passengers</label>
                     <input required type="number" min={1} max={9} value={seatCount}
@@ -421,11 +639,13 @@ export default function Home() {
               </div>
             )}
 
-            {/* Step 2: Results */}
+            {/* Step 2: Outbound Results */}
             {bookStep === "results" && (
               <div>
                 <button onClick={() => setBookStep("search")} className="text-sm text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">← Back to search</button>
-                <h2 className="text-2xl font-bold text-zinc-900 mb-1">Available Trips</h2>
+                <h2 className="text-2xl font-bold text-zinc-900 mb-1">
+                  {tripType === "round-trip" ? "Select Outbound Trip" : "Available Trips"}
+                </h2>
                 <p className="text-zinc-500 mb-6">{origin} → {destination} &middot; {date}</p>
 
                 {/* Passenger count adjuster */}
@@ -505,8 +725,111 @@ export default function Home() {
               </div>
             )}
 
+            {/* Step 2b: Return Results (round-trip only) */}
+            {bookStep === "return-results" && outboundTrip && (
+              <div>
+                <button onClick={handleBackFromReturnResults} className="text-sm text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">← Back to outbound trips</button>
+                <h2 className="text-2xl font-bold text-zinc-900 mb-1">Select Return Trip</h2>
+                <p className="text-zinc-500 mb-4">{outboundTrip.destination} → {origin} &middot; {returnDate}</p>
+
+                {/* Countdown banner */}
+                {holdSecondsLeft > 0 && (
+                  <div className={`rounded-xl px-5 py-3 mb-4 flex items-center justify-between border ${
+                    holdSecondsLeft < 60
+                      ? "bg-red-50 border-red-200"
+                      : "bg-yellow-50 border-yellow-200"
+                  }`}>
+                    <span className={`text-sm font-medium ${holdSecondsLeft < 60 ? "text-red-700" : "text-yellow-700"}`}>
+                      {holdSecondsLeft < 60 ? "Hold expiring soon!" : "Outbound seat held for you"}
+                    </span>
+                    <span className={`font-mono font-bold text-lg ${holdSecondsLeft < 60 ? "text-red-700" : "text-yellow-700"}`}>
+                      {formatCountdown(holdSecondsLeft)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Outbound trip summary */}
+                <div className="mb-5">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Your Outbound Trip</p>
+                  <div className="bg-black text-white rounded-xl p-5">
+                    <p className="text-zinc-400 text-sm mb-1">{outboundTrip.origin} → {outboundTrip.destination}</p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg font-semibold">{outboundTrip.departureTime}</span>
+                        <span className="text-zinc-500">→</span>
+                        <span className="text-lg font-semibold">{outboundTrip.arrivalTime}</span>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-yellow-400 text-xl font-bold">
+                          ${((outboundTrip.priceCents * seatCount) / 100).toFixed(2)}
+                        </p>
+                        {seatCount > 1 && (
+                          <p className="text-zinc-400 text-xs">{seatCount} x {outboundTrip.priceDisplay}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Available Return Trips</p>
+                {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
+
+                {inboundTrips.length === 0 ? (
+                  <div className="bg-white rounded-xl border border-zinc-200 p-8 text-center text-zinc-500">No return trips available for this date.</div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {inboundTrips.map((trip) => {
+                      const soldOut = trip.availableSeats === 0;
+                      const notEnough = !soldOut && trip.availableSeats < seatCount;
+                      const bookable = !soldOut && !notEnough;
+
+                      return (
+                        <div key={trip.id} className={`bg-white rounded-xl border shadow-sm p-5 flex items-center justify-between ${soldOut ? "border-zinc-200 opacity-60" : "border-zinc-200"}`}>
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-3">
+                              <span className="text-lg font-semibold text-zinc-900">{trip.departureTime}</span>
+                              <span className="text-zinc-400">→</span>
+                              <span className="text-lg font-semibold text-zinc-900">{trip.arrivalTime}</span>
+                            </div>
+                            {soldOut && <span className="text-sm font-medium text-red-500">Sold out</span>}
+                            {notEnough && (
+                              <span className="text-sm font-medium text-red-500">
+                                Only {trip.availableSeats} seat{trip.availableSeats !== 1 ? "s" : ""} available
+                              </span>
+                            )}
+                            {bookable && <span className="text-sm text-zinc-500">{trip.availableSeats} seats available</span>}
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div className="text-right">
+                              <p className="text-xl font-bold text-zinc-900">
+                                ${((trip.priceCents * seatCount) / 100).toFixed(2)}
+                              </p>
+                              {seatCount > 1 && (
+                                <p className="text-xs text-zinc-400">{seatCount} × {trip.priceDisplay}</p>
+                              )}
+                            </div>
+                            {soldOut ? (
+                              <span className="bg-zinc-100 text-zinc-400 font-semibold rounded-lg px-4 py-2 text-sm">Sold Out</span>
+                            ) : (
+                              <button
+                                onClick={() => { if (bookable && !loading) handleSelectReturnTrip(trip); }}
+                                disabled={!bookable || loading}
+                                className={`font-semibold rounded-lg px-4 py-2 transition-colors ${bookable && !loading ? "bg-yellow-400 hover:bg-yellow-500 text-black" : "bg-zinc-200 text-zinc-400 cursor-not-allowed"}`}
+                              >
+                                {loading ? "Holding..." : "Select"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Step 3: Booking Form */}
-            {bookStep === "booking" && selectedTrip && (
+            {bookStep === "booking" && outboundTrip && (
               <div>
                 <button onClick={handleBackFromBooking} className="text-sm text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">← Back to results</button>
                 <h2 className="text-2xl font-bold text-zinc-900 mb-6">Passenger Details</h2>
@@ -517,31 +840,90 @@ export default function Home() {
                       : "bg-yellow-50 border-yellow-200"
                   }`}>
                     <span className={`text-sm font-medium ${holdSecondsLeft < 60 ? "text-red-700" : "text-yellow-700"}`}>
-                      {holdSecondsLeft < 60 ? "⚠ Hold expiring soon!" : "Seats held for you"}
+                      {holdSecondsLeft < 60 ? "Hold expiring soon!" : "Seats held for you"}
                     </span>
                     <span className={`font-mono font-bold text-lg ${holdSecondsLeft < 60 ? "text-red-700" : "text-yellow-700"}`}>
                       {formatCountdown(holdSecondsLeft)}
                     </span>
                   </div>
                 )}
-                <div className="bg-black text-white rounded-xl p-5 mb-6">
-                  <p className="text-zinc-400 text-sm mb-1">{selectedTrip.origin} → {selectedTrip.destination}</p>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg font-semibold">{selectedTrip.departureTime}</span>
-                      <span className="text-zinc-500">→</span>
-                      <span className="text-lg font-semibold">{selectedTrip.arrivalTime}</span>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-yellow-400 text-xl font-bold">
-                        ${((selectedTrip.priceCents * seatCount) / 100).toFixed(2)}
-                      </p>
-                      {seatCount > 1 && (
-                        <p className="text-zinc-400 text-xs">{seatCount} x {selectedTrip.priceDisplay}</p>
-                      )}
+
+                {/* Trip summary card(s) */}
+                {tripType === "one-way" ? (
+                  <div className="bg-black text-white rounded-xl p-5 mb-6">
+                    <p className="text-zinc-400 text-sm mb-1">{outboundTrip.origin} → {outboundTrip.destination}</p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="text-lg font-semibold">{outboundTrip.departureTime}</span>
+                        <span className="text-zinc-500">→</span>
+                        <span className="text-lg font-semibold">{outboundTrip.arrivalTime}</span>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-yellow-400 text-xl font-bold">
+                          ${((outboundTrip.priceCents * seatCount) / 100).toFixed(2)}
+                        </p>
+                        {seatCount > 1 && (
+                          <p className="text-zinc-400 text-xs">{seatCount} x {outboundTrip.priceDisplay}</p>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="mb-6 flex flex-col gap-3">
+                    {/* Outbound card */}
+                    <div className="bg-black text-white rounded-xl p-5">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Outbound</p>
+                      <p className="text-zinc-400 text-sm mb-1">{outboundTrip.origin} → {outboundTrip.destination}</p>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="text-lg font-semibold">{outboundTrip.departureTime}</span>
+                          <span className="text-zinc-500">→</span>
+                          <span className="text-lg font-semibold">{outboundTrip.arrivalTime}</span>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-yellow-400 text-xl font-bold">
+                            ${((outboundTrip.priceCents * seatCount) / 100).toFixed(2)}
+                          </p>
+                          {seatCount > 1 && (
+                            <p className="text-zinc-400 text-xs">{seatCount} x {outboundTrip.priceDisplay}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    {/* Return card */}
+                    {inboundTrip && (
+                      <div className="bg-zinc-800 text-white rounded-xl p-5">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">Return</p>
+                        <p className="text-zinc-400 text-sm mb-1">{inboundTrip.origin} → {inboundTrip.destination}</p>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <span className="text-lg font-semibold">{inboundTrip.departureTime}</span>
+                            <span className="text-zinc-500">→</span>
+                            <span className="text-lg font-semibold">{inboundTrip.arrivalTime}</span>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-yellow-400 text-xl font-bold">
+                              ${((inboundTrip.priceCents * seatCount) / 100).toFixed(2)}
+                            </p>
+                            {seatCount > 1 && (
+                              <p className="text-zinc-400 text-xs">{seatCount} x {inboundTrip.priceDisplay}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {/* Total row */}
+                    {inboundTrip && (
+                      <div className="flex items-center justify-between bg-white rounded-xl border border-zinc-200 px-5 py-3">
+                        <span className="text-sm font-medium text-zinc-700">Total</span>
+                        <span className="text-lg font-bold text-zinc-900">
+                          ${(((outboundTrip.priceCents + inboundTrip.priceCents) * seatCount) / 100).toFixed(2)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <form onSubmit={handleBooking} className="bg-white rounded-xl shadow-sm border border-zinc-200 p-6 flex flex-col gap-5">
                   <div>
                     <div className="flex items-center justify-between mb-1">
@@ -591,26 +973,82 @@ export default function Home() {
                 <h2 className="text-2xl font-bold text-zinc-900 mb-2">Booking Confirmed</h2>
                 <p className="text-zinc-500 mb-8">A summary of your trip is below.</p>
                 <div className="bg-white rounded-xl border border-zinc-200 shadow-sm p-6 text-left max-w-md mx-auto mb-6">
-                  <div className="flex items-center justify-between mb-4 pb-4 border-b border-zinc-100">
-                    <span className="text-sm text-zinc-500">Confirmation ID</span>
-                    <span className="font-mono text-sm font-semibold text-zinc-900">{booking.confirmationId}</span>
-                  </div>
-                  <div className="flex flex-col gap-3 text-sm">
-                    <div className="flex justify-between"><span className="text-zinc-500">Passenger</span><span className="font-medium text-zinc-900">{booking.passengerName}</span></div>
-                    <div className="flex justify-between"><span className="text-zinc-500">Passengers</span><span className="font-medium text-zinc-900">{booking.seatCount}</span></div>
-                    <div className="flex justify-between"><span className="text-zinc-500">Email</span><span className="font-medium text-zinc-900">{booking.passengerEmail}</span></div>
-                    <div className="flex justify-between"><span className="text-zinc-500">Route</span><span className="font-medium text-zinc-900 text-right max-w-[60%]">{booking.origin} → {booking.destination}</span></div>
-                    <div className="flex justify-between"><span className="text-zinc-500">Departure</span><span className="font-medium text-zinc-900">{booking.departureTime}</span></div>
-                    <div className="flex justify-between"><span className="text-zinc-500">Arrival</span><span className="font-medium text-zinc-900">{booking.arrivalTime}</span></div>
-                    <div className="flex justify-between pt-3 border-t border-zinc-100"><span className="text-zinc-500">Total Paid</span><span className="font-bold text-zinc-900">{booking.priceDisplay}</span></div>
-                  </div>
+
+                  {booking.tripType === "one-way" ? (
+                    <>
+                      <div className="flex items-center justify-between mb-4 pb-4 border-b border-zinc-100">
+                        <span className="text-sm text-zinc-500">Confirmation ID</span>
+                        <span className="font-mono text-sm font-semibold text-zinc-900">{booking.outbound.confirmationId}</span>
+                      </div>
+                      <div className="flex flex-col gap-3 text-sm">
+                        <div className="flex justify-between"><span className="text-zinc-500">Passenger</span><span className="font-medium text-zinc-900">{booking.passengerName}</span></div>
+                        <div className="flex justify-between"><span className="text-zinc-500">Passengers</span><span className="font-medium text-zinc-900">{booking.outbound.seatCount}</span></div>
+                        <div className="flex justify-between"><span className="text-zinc-500">Email</span><span className="font-medium text-zinc-900">{booking.passengerEmail}</span></div>
+                        <div className="flex justify-between"><span className="text-zinc-500">Route</span><span className="font-medium text-zinc-900 text-right max-w-[60%]">{booking.outbound.origin} → {booking.outbound.destination}</span></div>
+                        <div className="flex justify-between"><span className="text-zinc-500">Departure</span><span className="font-medium text-zinc-900">{booking.outbound.departureTime}</span></div>
+                        <div className="flex justify-between"><span className="text-zinc-500">Arrival</span><span className="font-medium text-zinc-900">{booking.outbound.arrivalTime}</span></div>
+                        <div className="flex justify-between pt-3 border-t border-zinc-100"><span className="text-zinc-500">Total Paid</span><span className="font-bold text-zinc-900">{booking.totalPriceDisplay}</span></div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="mb-4 pb-4 border-b border-zinc-100">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm text-zinc-500">Passenger</span>
+                          <span className="font-medium text-zinc-900 text-sm">{booking.passengerName}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-zinc-500">Email</span>
+                          <span className="font-medium text-zinc-900 text-sm">{booking.passengerEmail}</span>
+                        </div>
+                      </div>
+
+                      {/* Outbound leg */}
+                      <div className="mb-4">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Outbound</p>
+                        <div className="flex flex-col gap-2 text-sm">
+                          <div className="flex justify-between"><span className="text-zinc-500">Confirmation ID</span><span className="font-mono text-xs font-semibold text-zinc-900">{booking.outbound.confirmationId}</span></div>
+                          <div className="flex justify-between"><span className="text-zinc-500">Route</span><span className="font-medium text-zinc-900">{booking.outbound.origin} → {booking.outbound.destination}</span></div>
+                          <div className="flex justify-between"><span className="text-zinc-500">Departure</span><span className="font-medium text-zinc-900">{booking.outbound.departureTime}</span></div>
+                          <div className="flex justify-between"><span className="text-zinc-500">Arrival</span><span className="font-medium text-zinc-900">{booking.outbound.arrivalTime}</span></div>
+                          <div className="flex justify-between"><span className="text-zinc-500">Price</span><span className="font-medium text-zinc-900">{booking.outbound.priceDisplay}</span></div>
+                        </div>
+                      </div>
+
+                      {/* Return leg */}
+                      {booking.inbound && (
+                        <div className="mb-4 pt-4 border-t border-zinc-100">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Return</p>
+                          <div className="flex flex-col gap-2 text-sm">
+                            <div className="flex justify-between"><span className="text-zinc-500">Confirmation ID</span><span className="font-mono text-xs font-semibold text-zinc-900">{booking.inbound.confirmationId}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Route</span><span className="font-medium text-zinc-900">{booking.inbound.origin} → {booking.inbound.destination}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Departure</span><span className="font-medium text-zinc-900">{booking.inbound.departureTime}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Arrival</span><span className="font-medium text-zinc-900">{booking.inbound.arrivalTime}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Price</span><span className="font-medium text-zinc-900">{booking.inbound.priceDisplay}</span></div>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex justify-between pt-3 border-t border-zinc-100 text-sm">
+                        <span className="text-zinc-500 font-medium">Total Paid</span>
+                        <span className="font-bold text-zinc-900">{booking.totalPriceDisplay}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
                 <div className="flex gap-3 justify-center">
                   <button onClick={handleBookReset}
                     className="bg-yellow-400 hover:bg-yellow-500 text-black font-semibold rounded-lg px-6 py-2.5 transition-colors">
                     Book Another Trip
                   </button>
-                  <button onClick={() => { switchTab("manage"); setManageQuery(booking.confirmationId); }}
+                  <button onClick={() => {
+                      const id = booking.outbound.confirmationId;
+                      setManageQuery(id);
+                      setManageStep("lookup");
+                      setManagedReservations([]);
+                      switchTab("manage");
+                      lookupReservations(id);
+                    }}
                     className="bg-white hover:bg-zinc-50 text-zinc-700 font-semibold rounded-lg px-6 py-2.5 border border-zinc-200 transition-colors">
                     Manage This Booking
                   </button>
@@ -659,36 +1097,143 @@ export default function Home() {
                   </div>
                 ) : (
                   <div className="flex flex-col gap-4">
-                    {managedReservations.map((r) => (
-                      <div key={r.id} className="bg-white rounded-xl border border-zinc-200 shadow-sm p-5">
-                        <div className="flex items-start justify-between mb-3">
-                          <div>
-                            <p className="text-sm text-zinc-500 mb-0.5">{r.origin} → {r.destination}</p>
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-zinc-900">{r.departureTime}</span>
-                              <span className="text-zinc-400">→</span>
-                              <span className="font-semibold text-zinc-900">{r.arrivalTime}</span>
+                    {(() => {
+                      // Group reservations by bookingGroupId
+                      const seen = new Set<string>();
+                      const groups: Array<{ key: string; reservations: ManagedReservation[] }> = [];
+                      for (const r of managedReservations) {
+                        if (r.bookingGroupId) {
+                          if (!seen.has(r.bookingGroupId)) {
+                            seen.add(r.bookingGroupId);
+                            const legs = managedReservations.filter((x) => x.bookingGroupId === r.bookingGroupId);
+                            groups.push({ key: r.bookingGroupId, reservations: legs });
+                          }
+                        } else {
+                          groups.push({ key: r.id, reservations: [r] });
+                        }
+                      }
+                      return groups.map(({ key, reservations: legs }) => {
+                        if (legs.length === 1) {
+                          // One-way reservation
+                          const r = legs[0];
+                          return (
+                            <div key={key} className="bg-white rounded-xl border border-zinc-200 shadow-sm p-5">
+                              <div className="flex items-start justify-between mb-3">
+                                <div>
+                                  <p className="text-sm text-zinc-500 mb-0.5">{r.origin} → {r.destination}</p>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold text-zinc-900">{r.departureTime}</span>
+                                    <span className="text-zinc-400">→</span>
+                                    <span className="font-semibold text-zinc-900">{r.arrivalTime}</span>
+                                  </div>
+                                  <p className="text-sm text-zinc-500 mt-1">{new Date(r.departureDate).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}</p>
+                                  <p className="text-sm text-zinc-500 mt-0.5">{r.seatCount} passenger{r.seatCount !== 1 ? "s" : ""}</p>
+                                </div>
+                                <span className="font-bold text-zinc-900">{r.priceDisplay}</span>
+                              </div>
+                              <div className="flex items-center justify-between pt-3 border-t border-zinc-100">
+                                <span className="font-mono text-xs text-zinc-400">{r.id}</span>
+                                <div className="flex gap-2">
+                                  <button onClick={() => handleStartModify(r)}
+                                    className="bg-zinc-900 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg px-3 py-1.5 transition-colors">
+                                    Change Trip
+                                  </button>
+                                  <button onClick={() => handleCancel(r)} disabled={loading}
+                                    className="bg-white hover:bg-red-50 text-red-600 border border-red-200 text-sm font-medium rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50">
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
                             </div>
-                            <p className="text-sm text-zinc-500 mt-1">{new Date(r.departureDate).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}</p>
-                            <p className="text-sm text-zinc-500 mt-0.5">{r.seatCount} passenger{r.seatCount !== 1 ? "s" : ""}</p>
+                          );
+                        }
+
+                        // Round-trip group
+                        // Sort: outbound first (earlier departure date), inbound second
+                        const sorted = [...legs].sort((a, b) =>
+                          new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+                        );
+                        const outboundLeg = sorted[0];
+                        const inboundLeg = sorted[1];
+                        const totalCents =
+                          legs.reduce((sum, l) => {
+                            const cents = parseFloat(l.priceDisplay.replace(/[^0-9.]/g, "")) * 100;
+                            return sum + cents;
+                          }, 0);
+                        const totalDisplay = `$${(totalCents / 100).toFixed(2)}`;
+
+                        return (
+                          <div key={key} className="bg-white rounded-xl border border-zinc-200 shadow-sm p-5">
+                            <div className="flex items-center justify-between mb-4">
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800">
+                                Round Trip
+                              </span>
+                              <span className="font-bold text-zinc-900">{totalDisplay} total</span>
+                            </div>
+
+                            {/* Outbound leg */}
+                            <div className="mb-3">
+                              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">Outbound</p>
+                              <p className="text-sm text-zinc-500 mb-0.5">{outboundLeg.origin} → {outboundLeg.destination}</p>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-zinc-900">{outboundLeg.departureTime}</span>
+                                <span className="text-zinc-400">→</span>
+                                <span className="font-semibold text-zinc-900">{outboundLeg.arrivalTime}</span>
+                              </div>
+                              <p className="text-sm text-zinc-500 mt-1">{new Date(outboundLeg.departureDate).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}</p>
+                              <div className="flex items-center justify-between mt-1">
+                                <span className="font-mono text-xs text-zinc-400">{outboundLeg.id}</span>
+                                <span className="text-sm text-zinc-600">{outboundLeg.priceDisplay}</span>
+                              </div>
+                            </div>
+
+                            {/* Return leg */}
+                            {inboundLeg && (
+                              <div className="pt-3 border-t border-zinc-100 mb-3">
+                                <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">Return</p>
+                                <p className="text-sm text-zinc-500 mb-0.5">{inboundLeg.origin} → {inboundLeg.destination}</p>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-zinc-900">{inboundLeg.departureTime}</span>
+                                  <span className="text-zinc-400">→</span>
+                                  <span className="font-semibold text-zinc-900">{inboundLeg.arrivalTime}</span>
+                                </div>
+                                <p className="text-sm text-zinc-500 mt-1">{new Date(inboundLeg.departureDate).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}</p>
+                                <div className="flex items-center justify-between mt-1">
+                                  <span className="font-mono text-xs text-zinc-400">{inboundLeg.id}</span>
+                                  <span className="text-sm text-zinc-600">{inboundLeg.priceDisplay}</span>
+                                </div>
+                              </div>
+                            )}
+
+                            <p className="text-sm text-zinc-500 mt-0.5 mb-3">{outboundLeg.seatCount} passenger{outboundLeg.seatCount !== 1 ? "s" : ""}</p>
+
+                            {/* Actions */}
+                            <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-100">
+                              <button onClick={() => handleStartModify(outboundLeg)}
+                                className="bg-zinc-900 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg px-3 py-1.5 transition-colors">
+                                Change Outbound
+                              </button>
+                              {inboundLeg && (
+                                <button onClick={() => handleStartModify(inboundLeg)}
+                                  className="bg-zinc-900 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg px-3 py-1.5 transition-colors">
+                                  Change Return
+                                </button>
+                              )}
+                              {inboundLeg && (
+                                <button onClick={() => handleCancel(inboundLeg)} disabled={loading}
+                                  className="bg-white hover:bg-red-50 text-red-600 border border-red-200 text-sm font-medium rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50">
+                                  Cancel Return Leg
+                                </button>
+                              )}
+                              <button onClick={() => handleCancelGroup(outboundLeg)} disabled={loading}
+                                className="bg-white hover:bg-red-50 text-red-600 border border-red-200 text-sm font-medium rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50">
+                                Cancel Entire Trip
+                              </button>
+                            </div>
                           </div>
-                          <span className="font-bold text-zinc-900">{r.priceDisplay}</span>
-                        </div>
-                        <div className="flex items-center justify-between pt-3 border-t border-zinc-100">
-                          <span className="font-mono text-xs text-zinc-400">{r.id}</span>
-                          <div className="flex gap-2">
-                            <button onClick={() => handleStartModify(r)}
-                              className="bg-zinc-900 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg px-3 py-1.5 transition-colors">
-                              Change Trip
-                            </button>
-                            <button onClick={() => handleCancel(r)} disabled={loading}
-                              className="bg-white hover:bg-red-50 text-red-600 border border-red-200 text-sm font-medium rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50">
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                        );
+                      });
+                    })()}
                   </div>
                 )}
               </div>
@@ -769,7 +1314,7 @@ export default function Home() {
                               ${((trip.priceCents * (modifyingReservation?.seatCount ?? 1)) / 100).toFixed(2)}
                             </p>
                             {(modifyingReservation?.seatCount ?? 1) > 1 && (
-                              <p className="text-xs text-zinc-400">{modifyingReservation?.seatCount} 
+                              <p className="text-xs text-zinc-400">{modifyingReservation?.seatCount}
                               x {trip.priceDisplay}</p>
                             )}
                           </div>

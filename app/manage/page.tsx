@@ -19,6 +19,7 @@ interface ManagedReservation {
   seatCount: number;
   priceDisplay: string;
   tripId: string;
+  bookingGroupId?: string | null;
 }
 
 interface Trip {
@@ -107,6 +108,20 @@ function ManagePageInner() {
     if (!res.ok) { setError(data.error ?? "Something went wrong"); return; }
     setReservations((prev) => prev.filter((r) => r.id !== reservation.id));
     setSuccessMessage("Your booking has been cancelled.");
+  }
+
+  async function handleCancelGroup(reservation: ManagedReservation) {
+    if (!confirm(`Cancel your entire round trip (both legs)?`)) return;
+    setError("");
+    setLoading(true);
+    const res = await fetch(`/api/reservations/${reservation.id}?cancelGroup=true`, { method: "DELETE" });
+    const data = await res.json();
+    setLoading(false);
+    if (!res.ok) { setError(data.error ?? "Something went wrong"); return; }
+    setReservations((prev) =>
+      prev.filter((r) => r.bookingGroupId !== reservation.bookingGroupId)
+    );
+    setSuccessMessage("Both legs of your round trip have been cancelled.");
   }
 
   function handleStartModify(reservation: ManagedReservation) {
@@ -218,38 +233,137 @@ function ManagePageInner() {
               </div>
             ) : (
               <div className="flex flex-col gap-4">
-                {reservations.map((r) => (
-                  <div key={r.id} className="bg-white rounded-xl border border-zinc-200 shadow-sm p-5">
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <p className="text-sm text-zinc-500 mb-0.5">{r.origin} → {r.destination}</p>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-zinc-900">{r.departureTime}</span>
-                          <span className="text-zinc-400">→</span>
-                          <span className="font-semibold text-zinc-900">{r.arrivalTime}</span>
+                {(() => {
+                  const seen = new Set<string>();
+                  const groups: Array<{ key: string; legs: ManagedReservation[] }> = [];
+                  for (const r of reservations) {
+                    if (r.bookingGroupId) {
+                      if (!seen.has(r.bookingGroupId)) {
+                        seen.add(r.bookingGroupId);
+                        const legs = reservations.filter((x) => x.bookingGroupId === r.bookingGroupId);
+                        groups.push({ key: r.bookingGroupId, legs });
+                      }
+                    } else {
+                      groups.push({ key: r.id, legs: [r] });
+                    }
+                  }
+                  return groups.map(({ key, legs }) => {
+                    if (legs.length === 1) {
+                      const r = legs[0];
+                      return (
+                        <div key={key} className="bg-white rounded-xl border border-zinc-200 shadow-sm p-5">
+                          <div className="flex items-start justify-between mb-3">
+                            <div>
+                              <p className="text-sm text-zinc-500 mb-0.5">{r.origin} → {r.destination}</p>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-zinc-900">{r.departureTime}</span>
+                                <span className="text-zinc-400">→</span>
+                                <span className="font-semibold text-zinc-900">{r.arrivalTime}</span>
+                              </div>
+                              <p className="text-sm text-zinc-500 mt-1">
+                                {new Date(r.departureDate).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}
+                              </p>
+                              <p className="text-sm text-zinc-500 mt-0.5">{r.seatCount} passenger{r.seatCount !== 1 ? "s" : ""}</p>
+                            </div>
+                            <span className="font-bold text-zinc-900">{r.priceDisplay}</span>
+                          </div>
+                          <div className="flex items-center justify-between pt-3 border-t border-zinc-100">
+                            <span className="font-mono text-xs text-zinc-400">{r.id}</span>
+                            <div className="flex gap-2">
+                              <button onClick={() => handleStartModify(r)}
+                                className="bg-zinc-900 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg px-3 py-1.5 transition-colors">
+                                Change Trip
+                              </button>
+                              <button onClick={() => handleCancel(r)} disabled={loading}
+                                className="bg-white hover:bg-red-50 text-red-600 border border-red-200 text-sm font-medium rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50">
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                        <p className="text-sm text-zinc-500 mt-1">
-                          {new Date(r.departureDate).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}
-                        </p>
-                        <p className="text-sm text-zinc-500 mt-0.5">{r.seatCount} passenger{r.seatCount !== 1 ? "s" : ""}</p>
+                      );
+                    }
+
+                    // Round-trip group
+                    const sorted = [...legs].sort(
+                      (a, b) => new Date(a.departureDate).getTime() - new Date(b.departureDate).getTime()
+                    );
+                    const outboundLeg = sorted[0];
+                    const inboundLeg = sorted[1];
+                    const totalCents = legs.reduce((sum, l) => {
+                      return sum + parseFloat(l.priceDisplay.replace(/[^0-9.]/g, "")) * 100;
+                    }, 0);
+                    const totalDisplay = `$${(totalCents / 100).toFixed(2)}`;
+
+                    return (
+                      <div key={key} className="bg-white rounded-xl border border-zinc-200 shadow-sm p-5">
+                        <div className="flex items-center justify-between mb-4">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800">
+                            Round Trip
+                          </span>
+                          <span className="font-bold text-zinc-900">{totalDisplay} total</span>
+                        </div>
+
+                        <div className="mb-3">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">Outbound</p>
+                          <p className="text-sm text-zinc-500 mb-0.5">{outboundLeg.origin} → {outboundLeg.destination}</p>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-zinc-900">{outboundLeg.departureTime}</span>
+                            <span className="text-zinc-400">→</span>
+                            <span className="font-semibold text-zinc-900">{outboundLeg.arrivalTime}</span>
+                          </div>
+                          <p className="text-sm text-zinc-500 mt-1">{new Date(outboundLeg.departureDate).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}</p>
+                          <div className="flex items-center justify-between mt-1">
+                            <span className="font-mono text-xs text-zinc-400">{outboundLeg.id}</span>
+                            <span className="text-sm text-zinc-600">{outboundLeg.priceDisplay}</span>
+                          </div>
+                        </div>
+
+                        {inboundLeg && (
+                          <div className="pt-3 border-t border-zinc-100 mb-3">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">Return</p>
+                            <p className="text-sm text-zinc-500 mb-0.5">{inboundLeg.origin} → {inboundLeg.destination}</p>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-zinc-900">{inboundLeg.departureTime}</span>
+                              <span className="text-zinc-400">→</span>
+                              <span className="font-semibold text-zinc-900">{inboundLeg.arrivalTime}</span>
+                            </div>
+                            <p className="text-sm text-zinc-500 mt-1">{new Date(inboundLeg.departureDate).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" })}</p>
+                            <div className="flex items-center justify-between mt-1">
+                              <span className="font-mono text-xs text-zinc-400">{inboundLeg.id}</span>
+                              <span className="text-sm text-zinc-600">{inboundLeg.priceDisplay}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        <p className="text-sm text-zinc-500 mb-3">{outboundLeg.seatCount} passenger{outboundLeg.seatCount !== 1 ? "s" : ""}</p>
+
+                        <div className="flex flex-wrap gap-2 pt-3 border-t border-zinc-100">
+                          <button onClick={() => handleStartModify(outboundLeg)}
+                            className="bg-zinc-900 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg px-3 py-1.5 transition-colors">
+                            Change Outbound
+                          </button>
+                          {inboundLeg && (
+                            <button onClick={() => handleStartModify(inboundLeg)}
+                              className="bg-zinc-900 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg px-3 py-1.5 transition-colors">
+                              Change Return
+                            </button>
+                          )}
+                          {inboundLeg && (
+                            <button onClick={() => handleCancel(inboundLeg)} disabled={loading}
+                              className="bg-white hover:bg-red-50 text-red-600 border border-red-200 text-sm font-medium rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50">
+                              Cancel Return Leg
+                            </button>
+                          )}
+                          <button onClick={() => handleCancelGroup(outboundLeg)} disabled={loading}
+                            className="bg-white hover:bg-red-50 text-red-600 border border-red-200 text-sm font-medium rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50">
+                            Cancel Entire Trip
+                          </button>
+                        </div>
                       </div>
-                      <span className="font-bold text-zinc-900">{r.priceDisplay}</span>
-                    </div>
-                    <div className="flex items-center justify-between pt-3 border-t border-zinc-100">
-                      <span className="font-mono text-xs text-zinc-400">{r.id}</span>
-                      <div className="flex gap-2">
-                        <button onClick={() => handleStartModify(r)}
-                          className="bg-zinc-900 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg px-3 py-1.5 transition-colors">
-                          Change Trip
-                        </button>
-                        <button onClick={() => handleCancel(r)} disabled={loading}
-                          className="bg-white hover:bg-red-50 text-red-600 border border-red-200 text-sm font-medium rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50">
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                    );
+                  });
+                })()}
               </div>
             )}
           </div>

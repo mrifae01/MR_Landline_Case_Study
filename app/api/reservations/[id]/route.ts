@@ -4,11 +4,13 @@ import { sendBookingConfirmation } from "@/lib/email";
 
 // DELETE /api/reservations/:id
 // Cancels a reservation and restores the seat to inventory.
+// If ?cancelGroup=true and the reservation has a bookingGroupId, cancels both legs.
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const cancelGroup = request.nextUrl.searchParams.get("cancelGroup");
 
   const reservation = await prisma.reservation.findUnique({
     where: { id },
@@ -20,6 +22,43 @@ export async function DELETE(
 
   if (reservation.status === "CANCELLED") {
     return NextResponse.json({ error: "Reservation is already cancelled" }, { status: 409 });
+  }
+
+  // Cancel entire round trip if requested
+  if (cancelGroup === "true" && reservation.bookingGroupId) {
+    const otherReservation = await prisma.reservation.findFirst({
+      where: {
+        bookingGroupId: reservation.bookingGroupId,
+        id: { not: id },
+        status: { not: "CANCELLED" },
+      },
+    });
+
+    await prisma.$transaction(async (tx) => {
+      // Cancel this reservation and restore its seats
+      await tx.reservation.update({
+        where: { id },
+        data: { status: "CANCELLED" },
+      });
+      await tx.inventory.update({
+        where: { tripId: reservation.tripId },
+        data: { availableSeats: { increment: reservation.seatCount } },
+      });
+
+      // Cancel the other leg if it exists
+      if (otherReservation) {
+        await tx.reservation.update({
+          where: { id: otherReservation.id },
+          data: { status: "CANCELLED" },
+        });
+        await tx.inventory.update({
+          where: { tripId: otherReservation.tripId },
+          data: { availableSeats: { increment: otherReservation.seatCount } },
+        });
+      }
+    });
+
+    return NextResponse.json({ message: "Both legs cancelled successfully" });
   }
 
   // Cancel the reservation and restore the seat in a single transaction
@@ -119,15 +158,18 @@ export async function PATCH(
     // Send confirmation email in production only
     if (process.env.NODE_ENV === "production") sendBookingConfirmation({
       to: confirmed.passengerEmail,
-      confirmationId: confirmed.id,
       passengerName: confirmed.passengerName,
-      origin: route.origin,
-      destination: route.destination,
-      departureDate: confirmed.trip.departureDate.toISOString(),
-      departureTime: schedule.departureTime,
-      arrivalTime: schedule.arrivalTime,
-      seatCount: confirmed.seatCount,
-      priceDisplay,
+      outbound: {
+        confirmationId: confirmed.id,
+        origin: route.origin,
+        destination: route.destination,
+        departureDate: confirmed.trip.departureDate.toISOString(),
+        departureTime: schedule.departureTime,
+        arrivalTime: schedule.arrivalTime,
+        seatCount: confirmed.seatCount,
+        priceDisplay,
+      },
+      totalPriceDisplay: priceDisplay,
     })?.catch((err) => console.error("Email failed:", err));
 
     return NextResponse.json({

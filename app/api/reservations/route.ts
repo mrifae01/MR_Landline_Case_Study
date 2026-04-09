@@ -15,23 +15,33 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const reservations = await prisma.reservation.findMany({
+  // Initial lookup — find the reservation(s) matching id or email
+  const initial = await prisma.reservation.findMany({
     where: {
       ...(id ? { id } : {}),
       ...(email ? { passengerEmail: email } : {}),
       status: "CONFIRMED",
     },
     include: {
-      trip: {
-        include: {
-          schedule: {
-            include: { route: true },
-          },
-        },
-      },
+      trip: { include: { schedule: { include: { route: true } } } },
     },
     orderBy: { createdAt: "desc" },
   });
+
+  // If looking up by id and the result has a bookingGroupId, fetch the other leg too
+  let reservations = initial;
+  if (id && initial.length === 1 && initial[0].bookingGroupId) {
+    reservations = await prisma.reservation.findMany({
+      where: {
+        bookingGroupId: initial[0].bookingGroupId,
+        status: "CONFIRMED",
+      },
+      include: {
+        trip: { include: { schedule: { include: { route: true } } } },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+  }
 
   const results = reservations.map((r) => ({
     id: r.id,
@@ -48,6 +58,7 @@ export async function GET(request: NextRequest) {
     totalCost: r.totalCost,
     priceDisplay: `$${(r.totalCost / 100).toFixed(2)}`,
     tripId: r.trip.id,
+    bookingGroupId: r.bookingGroupId ?? null,
   }));
 
   return NextResponse.json({ reservations: results });
@@ -58,7 +69,7 @@ export async function GET(request: NextRequest) {
 // Atomically decrements seats — either both happen or neither does.
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { tripId, seatCount: rawSeatCount } = body;
+  const { tripId, seatCount: rawSeatCount, bookingGroupId } = body;
   const seatCount = Math.min(9, Math.max(1, Number(rawSeatCount ?? 1)));
 
   if (!tripId) {
@@ -110,6 +121,7 @@ export async function POST(request: NextRequest) {
           totalCost,
           status: "HELD",
           expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+          ...(bookingGroupId ? { bookingGroupId } : {}),
         },
       });
 
