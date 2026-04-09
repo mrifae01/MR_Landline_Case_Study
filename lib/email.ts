@@ -1,3 +1,4 @@
+// This file contains a function to send booking confirmation emails using Nodemailer and Gmail's SMTP service. It constructs a visually appealing HTML email with trip details and a link to manage the booking.
 import nodemailer from "nodemailer";
 
 const transporter = nodemailer.createTransport({

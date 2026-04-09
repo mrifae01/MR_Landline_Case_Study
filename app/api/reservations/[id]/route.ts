@@ -248,6 +248,7 @@ export async function PATCH(
           seatCount: existing.seatCount,
           totalCost,
           status: "CONFIRMED",
+          bookingGroupId: existing.bookingGroupId ?? null,
         },
         include: {
           trip: {

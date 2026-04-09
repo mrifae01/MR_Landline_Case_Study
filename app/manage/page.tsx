@@ -1,3 +1,5 @@
+// This is the main "Manage Booking" page where users can look up their reservations using a confirmation ID or email, view their current bookings, and modify or cancel them. It handles all the client-side logic and UI for managing bookings.
+
 "use client";
 
 import { useEffect, useState, useCallback, Suspense } from "react";
@@ -52,6 +54,8 @@ function ManagePageInner() {
   const [reservations, setReservations] = useState<ManagedReservation[]>([]);
   const [modifyingReservation, setModifyingReservation] = useState<ManagedReservation | null>(null);
   const [modifyDate, setModifyDate] = useState("");
+  const [modifyDateMin, setModifyDateMin] = useState("");
+  const [modifyDateMax, setModifyDateMax] = useState("");
   const [modifyTrips, setModifyTrips] = useState<Trip[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -129,6 +133,29 @@ function ManagePageInner() {
     setModifyDate("");
     setModifyTrips([]);
     setError("");
+
+    const today = new Date().toISOString().split("T")[0];
+    let min = today;
+    let max = "";
+
+    if (reservation.bookingGroupId) {
+      const otherLeg = reservations.find(
+        (r) => r.bookingGroupId === reservation.bookingGroupId && r.id !== reservation.id
+      );
+      if (otherLeg) {
+        const otherDate = otherLeg.departureDate.slice(0, 10);
+        const thisDate = reservation.departureDate.slice(0, 10);
+        if (thisDate <= otherDate) {
+          // This is the outbound leg — cannot go past the return date
+          max = otherDate;
+        } else {
+          // This is the return leg — cannot go before the outbound date
+          min = otherDate > today ? otherDate : today;
+        }
+      }
+    }
+    setModifyDateMin(min);
+    setModifyDateMax(max);
     setStep("modify-search");
   }
 
@@ -183,9 +210,14 @@ function ManagePageInner() {
             </div>
             <span className="text-xl font-bold tracking-widest">NE</span>
           </a>
-          <a href="/" className="text-sm text-zinc-400 hover:text-white transition-colors">
-            ← Book a Trip
-          </a>
+          <div className="flex gap-1 bg-zinc-800 rounded-lg p-1">
+            <a href="/" className="px-4 py-1.5 rounded-md text-sm font-medium text-zinc-400 hover:text-white transition-colors">
+              Book
+            </a>
+            <span className="px-4 py-1.5 rounded-md text-sm font-medium bg-yellow-400 text-black">
+              Manage Booking
+            </span>
+          </div>
         </div>
       </header>
 
@@ -388,7 +420,9 @@ function ManagePageInner() {
             <form onSubmit={handleModifySearch} className="bg-white rounded-xl shadow-sm border border-zinc-200 p-6 flex flex-col gap-5">
               <div>
                 <label className="block text-sm font-medium text-zinc-700 mb-1">New Travel Date</label>
-                <input required type="date" value={modifyDate} min={new Date().toISOString().split("T")[0]}
+                <input required type="date" value={modifyDate}
+                  min={modifyDateMin}
+                  max={modifyDateMax || undefined}
                   onChange={(e) => setModifyDate(e.target.value)}
                   className="w-full border border-zinc-300 rounded-lg px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-yellow-400" />
               </div>
